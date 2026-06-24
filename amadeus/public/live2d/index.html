@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kurisu Live2D</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #1a1a2e; overflow: hidden; width: 100vw; height: 100vh; }
+  #canvas { display: block; width: 100%; height: 100%; }
+  #subtitle {
+    position: fixed; bottom: 0; left: 0; right: 0;
+    padding: 16px 24px;
+    background: rgba(0,0,0,0.6);
+    color: #fff; font: 18px/1.6 'Noto Sans JP', sans-serif;
+    text-align: center;
+    opacity: 0; transition: opacity 0.3s;
+    pointer-events: none;
+  }
+  #subtitle.visible { opacity: 1; }
+  #status {
+    position: fixed; top: 12px; right: 16px;
+    font: 12px monospace; color: #888;
+  }
+  .dot {
+    display: inline-block; width: 8px; height: 8px;
+    border-radius: 50%; margin-right: 6px;
+    background: #f44; vertical-align: middle;
+  }
+  #status.connected .dot { background: #4f4; }
+</style>
+</head>
+<body>
+<canvas id="canvas"></canvas>
+<div id="subtitle"></div>
+<div id="status"><span class="dot"></span>Disconnected</div>
+
+<script src="https://cdn.jsdelivr.net/npm/pixi.js@7.3.3/dist/pixi.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/dylanNew/live2d/webgl/Live2D/lib/live2d.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pixi-live2d-display@0.4.0/dist/cubism2.min.js"></script>
+<script>
+(async () => {
+  const app = new PIXI.Application({
+    view: document.getElementById('canvas'),
+    resizeTo: window,
+    backgroundAlpha: 0,
+    antialias: true,
+  });
+
+  // Load Live2D model
+  const model = await PIXI.live2d.Live2DModel.from('/model/kurisu.model.json');
+  app.stage.addChild(model);
+
+  model.anchor.set(0.5, 0.5);
+  function fitModel() {
+    const s = Math.min(window.innerWidth / model.width, window.innerHeight / model.height) * 0.8;
+    model.scale.set(s);
+    model.x = window.innerWidth / 2;
+    model.y = window.innerHeight / 2;
+  }
+  fitModel();
+  window.addEventListener('resize', fitModel);
+
+  // --- Audio + Lip Sync ---
+  let audioCtx = null;
+  let analyser = null;
+  let mouthValue = 0;
+
+  function ensureAudioCtx() {
+    if (!audioCtx) {
+      audioCtx = new AudioContext();
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 256;
+    }
+  }
+
+  function playAudio(url) {
+    ensureAudioCtx();
+    const audio = new Audio(url);
+    const source = audioCtx.createMediaElementSource(audio);
+    source.connect(analyser);
+    analyser.connect(audioCtx.destination);
+    audio.play().catch(e => console.warn('Audio play blocked:', e));
+
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+    let raf;
+    function tick() {
+      analyser.getByteFrequencyData(dataArray);
+      let sum = 0;
+      const count = Math.min(32, dataArray.length);
+      for (let i = 0; i < count; i++) sum += dataArray[i];
+      mouthValue = Math.min(1, (sum / count) / 128);
+      raf = requestAnimationFrame(tick);
+    }
+    tick();
+    audio.addEventListener('ended', () => { cancelAnimationFrame(raf); mouthValue = 0; });
+  }
+
+  // Drive mouth parameter each frame
+  app.ticker.add(() => {
+    const cm = model.internalModel?.coreModel;
+    if (cm) cm.setParamFloat('PARAM_MOUTH_OPEN_Y', mouthValue);
+  });
+
+  // --- Subtitle ---
+  const subtitleEl = document.getElementById('subtitle');
+  let subTimer = null;
+  function showSubtitle(text) {
+    if (!text) return;
+    subtitleEl.textContent = text;
+    subtitleEl.classList.add('visible');
+    clearTimeout(subTimer);
+    subTimer = setTimeout(() => subtitleEl.classList.remove('visible'), 10000);
+  }
+
+  // --- WebSocket ---
+  const statusEl = document.getElementById('status');
+  function connect() {
+    const ws = new WebSocket(`ws://${location.host}`);
+    ws.onopen = () => {
+      statusEl.className = 'connected';
+      statusEl.innerHTML = '<span class="dot"></span>Connected';
+    };
+    ws.onmessage = (e) => {
+      const d = JSON.parse(e.data);
+      if (d.emotion) model.expression(d.emotion);
+      if (d.audio) playAudio(d.audio);
+      if (d.voice_text) showSubtitle(d.voice_text);
+    };
+    ws.onclose = () => {
+      statusEl.className = '';
+      statusEl.innerHTML = '<span class="dot"></span>Disconnected';
+      setTimeout(connect, 3000);
+    };
+    ws.onerror = () => ws.close();
+  }
+  connect();
+
+  // Resume AudioContext on first user interaction (browser autoplay policy)
+  document.addEventListener('click', () => {
+    ensureAudioCtx();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+  }, { once: true });
+})();
+</script>
+</body>
+</html>

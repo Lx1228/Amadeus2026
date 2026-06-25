@@ -20,6 +20,10 @@ amadeus/.env
 amadeus/.env.local
 amadeus/.env.*.local
 
+# 允许 .env.example（模板文件，需要提交到 Git）
+!.env.example
+!amadeus/.env.example
+
 # 系统文件
 .DS_Store
 Thumbs.db

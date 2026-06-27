@@ -29,6 +29,7 @@ interface TTSRequestBody {
   apiKey: string;
   engine?: TTSEngine;
   provider?: TTSProvider;
+  voiceId?: string;
   custom?: { endpoint: string; model: string };
 }
 
@@ -39,6 +40,7 @@ export async function POST(request: Request) {
       apiKey: rawApiKey,
       engine = "cosyvoice-v3.5-flash",
       provider = "aliyun",
+      voiceId: userVoiceId,
       custom,
     } = (await request.json()) as TTSRequestBody;
 
@@ -65,7 +67,8 @@ export async function POST(request: Request) {
 
     if (provider === "minimax") {
       // === MiniMax T2A V2 ===
-      const voiceId = MINIMAX_VOICE_ID;
+      // 优先用用户在设置里填的音色 ID，留空则用默认
+      const voiceId = (userVoiceId || "").trim() || MINIMAX_VOICE_ID;
       const synthUrl = "https://api.minimaxi.com/v1/t2a_v2";
 
       const res = await fetch(synthUrl, {
@@ -162,7 +165,15 @@ export async function POST(request: Request) {
 
     } else {
       // === 阿里云百炼 CosyVoice / Qwen-TTS ===
-      const voiceId = ALIYUN_VOICE_IDS[engine];
+      // 优先用用户在设置里填的音色 ID（克隆自用户自己的阿里云账号）
+      // 留空则用默认音色 ID（仅作者账号可用，其他账号调用会报错）
+      const userVid = (userVoiceId || "").trim();
+      const voiceId = userVid || ALIYUN_VOICE_IDS[engine];
+      if (userVid) {
+        console.log(`[TTS route] 使用用户自定义音色 ID: ${userVid.slice(0, 30)}...`);
+      } else {
+        console.log(`[TTS route] 使用默认音色 ID（仅作者账号可用）: ${voiceId?.slice(0, 30)}...`);
+      }
 
       if (engine === "qwen3-tts-vc") {
         // Qwen3-TTS-VC (different endpoint)

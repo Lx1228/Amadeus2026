@@ -8,6 +8,8 @@ import {
   loadTTSProvider, saveTTSProvider, TTSProvider,
   loadAliyunAPIKey, saveAliyunAPIKey,
   loadMiniMaxAPIKey, saveMiniMaxAPIKey,
+  loadAliyunVoiceId, saveAliyunVoiceId,
+  loadMiniMaxVoiceId, saveMiniMaxVoiceId,
   loadTTSEngine, saveTTSEngine, TTSEngine,
   loadCustomTTS, saveCustomTTS,
 } from "@/lib/tts";
@@ -87,6 +89,8 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
   const [ttsConfig, setTTSConfig] = useState<TTSConfig>(loadTTSConfig);
   const [aliyunKey, setAliyunKey] = useState("");
   const [minimaxKey, setMiniMaxKey] = useState("");
+  const [aliyunVoiceId, setAliyunVoiceId] = useState("");
+  const [minimaxVoiceId, setMiniMaxVoiceId] = useState("");
   const [ttsProvider, setTTSProvider] = useState<TTSProvider>(loadTTSProvider);
   const [ttsEngine, setTTSEngine] = useState<TTSEngine>(loadTTSEngine);
   const [customTTS, setCustomTTS] = useState(loadCustomTTS);
@@ -109,6 +113,8 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
     setTTSConfig(loadTTSConfig());
     setAliyunKey(loadAliyunAPIKey());
     setMiniMaxKey(loadMiniMaxAPIKey());
+    setAliyunVoiceId(loadAliyunVoiceId());
+    setMiniMaxVoiceId(loadMiniMaxVoiceId());
     setTTSProvider(loadTTSProvider());
     setTTSEngine(loadTTSEngine());
     setCustomTTS(loadCustomTTS());
@@ -488,6 +494,35 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                       </select>
                       <p className="text-xs text-zinc-600 mt-1">"指令控制"会根据语境自动调节语气</p>
                     </div>
+                    <div>
+                      <label className="block text-xs text-zinc-400 mb-1 font-mono">音色 ID（可选）</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={aliyunVoiceId}
+                          onChange={(e) => setAliyunVoiceId(e.target.value)}
+                          autoComplete="off"
+                          placeholder="留空用默认，需自行克隆音色"
+                          className="flex-1 bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
+                        />
+                        <button
+                          onClick={() => {
+                            const trimmed = aliyunVoiceId.trim();
+                            setAliyunVoiceId(trimmed);
+                            saveAliyunVoiceId(trimmed);
+                            notifyChange();
+                            showToast(trimmed ? "音色 ID 已保存" : "已清空，将使用默认音色");
+                          }}
+                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-mono text-sm whitespace-nowrap"
+                        >
+                          保存
+                        </button>
+                      </div>
+                      <p className="text-xs text-zinc-600 mt-1">
+                        在阿里云百炼控制台「声音克隆」克隆音色后，把得到的音色 ID 填这里。
+                        仓库 public/voice_sample.mp3 是红莉栖音色样本，可直接用于克隆。
+                      </p>
+                    </div>
                   </>
                 )}
 
@@ -553,6 +588,34 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                         <option value="speech-02-turbo">speech-02-turbo（小语种能力加强）</option>
                       </select>
                       <p className="text-xs text-zinc-600 mt-1">所有模型都支持情绪控制，会根据语境自动调节语气</p>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-zinc-400 mb-1 font-mono">音色 ID（可选）</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={minimaxVoiceId}
+                          onChange={(e) => setMiniMaxVoiceId(e.target.value)}
+                          autoComplete="off"
+                          placeholder="留空用默认 kurisu-amadeus"
+                          className="flex-1 bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
+                        />
+                        <button
+                          onClick={() => {
+                            const trimmed = minimaxVoiceId.trim();
+                            setMiniMaxVoiceId(trimmed);
+                            saveMiniMaxVoiceId(trimmed);
+                            notifyChange();
+                            showToast(trimmed ? "音色 ID 已保存" : "已清空，将使用默认音色");
+                          }}
+                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-mono text-sm whitespace-nowrap"
+                        >
+                          保存
+                        </button>
+                      </div>
+                      <p className="text-xs text-zinc-600 mt-1">
+                        在 MiniMax 控制台「声音复刻」复刻音色后，把得到的音色 ID 填这里。
+                      </p>
                     </div>
                   </>
                 )}

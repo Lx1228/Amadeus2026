@@ -2,6 +2,8 @@ const TTS_STORAGE_KEY = "amadeus_tts_config";
 const TTS_PROVIDER_STORAGE_KEY = "amadeus_tts_provider";
 const ALIYUN_KEY_STORAGE_KEY = "amadeus_aliyun_api_key";
 const MINIMAX_KEY_STORAGE_KEY = "amadeus_minimax_api_key";
+const ALIYUN_VOICE_ID_STORAGE_KEY = "amadeus_aliyun_voice_id";
+const MINIMAX_VOICE_ID_STORAGE_KEY = "amadeus_minimax_voice_id";
 const TTS_ENGINE_STORAGE_KEY = "amadeus_tts_engine";
 const TTS_ENGINE_MIGRATION_KEY = "amadeus_tts_engine_migrated_v2";
 const CUSTOM_TTS_STORAGE_KEY = "amadeus_custom_tts";
@@ -85,6 +87,25 @@ export function loadMiniMaxAPIKey(): string {
 
 export function saveMiniMaxAPIKey(key: string) {
   localStorage.setItem(MINIMAX_KEY_STORAGE_KEY, key);
+}
+
+// === 音色 ID（用户自行克隆的音色 ID，留空则服务端用默认） ===
+export function loadAliyunVoiceId(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(ALIYUN_VOICE_ID_STORAGE_KEY) || "";
+}
+
+export function saveAliyunVoiceId(id: string) {
+  localStorage.setItem(ALIYUN_VOICE_ID_STORAGE_KEY, id);
+}
+
+export function loadMiniMaxVoiceId(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(MINIMAX_VOICE_ID_STORAGE_KEY) || "";
+}
+
+export function saveMiniMaxVoiceId(id: string) {
+  localStorage.setItem(MINIMAX_VOICE_ID_STORAGE_KEY, id);
 }
 
 export function loadTTSEngine(): TTSEngine {
@@ -221,14 +242,18 @@ export async function synthesizeSpeech(
   const engine = loadTTSEngine();
   console.log("[TTS] 当前配置:", { provider, engine });
 
-  // 根据提供商获取对应的 API Key
+  // 根据提供商获取对应的 API Key 和音色 ID
   let apiKey: string;
+  let voiceId: string;
   if (provider === "aliyun") {
     apiKey = loadAliyunAPIKey();
+    voiceId = loadAliyunVoiceId();
   } else if (provider === "minimax") {
     apiKey = loadMiniMaxAPIKey();
+    voiceId = loadMiniMaxVoiceId();
   } else {
     apiKey = loadCustomTTS().apiKey;
+    voiceId = "";
   }
   // 关键：trim 掉复制时可能带入的空格/换行符（401 的常见元凶）
   apiKey = (apiKey || "").trim();
@@ -249,6 +274,7 @@ export async function synthesizeSpeech(
         apiKey,
         engine,
         provider,
+        voiceId,
         ...(provider === "custom" ? { custom: loadCustomTTS() } : {}),
       }),
     });

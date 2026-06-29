@@ -19,10 +19,18 @@ const BLINK_CLOSE_S = 0.1;     // 闭眼过程用时（Cubism 官方默认）
 const BLINK_CLOSED_S = 0.05;   // 完全闭着用时（Cubism 官方默认）
 const BLINK_OPEN_S = 0.1;      // 睁眼过程用时（Cubism 官方默认）
 
+// === 模型缩放基准 ===
+// 基准窗口高度 900 对应 scale 0.3；窗口高度变化时模型按比例同步缩放
+const BASE_HEIGHT = 900;
+const BASE_SCALE = 0.3;
+
 export default function Live2D({ modelPath, width = 400, height = 600, onModelReady }: Live2DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [ready, setReady] = useState(false);
   const appRef = useRef<Application | null>(null);
+  const liveModelRef = useRef<Live2DModelType | null>(null);
+  // 最新 width/height：模型异步加载完成时用它校正，避免加载期间窗口已变化导致不一致
+  const sizeRef = useRef({ width, height });
   const errorHandlerRef = useRef<((e: ErrorEvent) => void) | null>(null);
   // init 运行标记：防止 StrictMode 双调用 / HMR 重入导致重复创建
   const initStartedRef = useRef(false);
@@ -83,9 +91,15 @@ export default function Live2D({ modelPath, width = 400, height = 600, onModelRe
       console.log("[Live2D] 模型加载成功, 尺寸:", model.width, "x", model.height);
 
       model.anchor.set(0.5, 0.5);
-      model.scale.set(0.3);
+      // 模型加载是异步的，加载期间窗口尺寸可能已变化：按最新尺寸校正 renderer 与模型
+      const curW = sizeRef.current.width;
+      const curH = sizeRef.current.height;
+      appRef.current.renderer.resize(curW, curH);
+      const initScale = BASE_SCALE * (curH / BASE_HEIGHT);
+      model.scale.set(initScale);
       model.x = appRef.current.screen.width / 2;
       model.y = appRef.current.screen.height * 0.65;
+      liveModelRef.current = model;
       appRef.current.stage.addChild(model);
       console.log("[Live2D] 模型已添加到舞台, 位置:", model.x, model.y, "缩放:", model.scale.x);
 
@@ -377,7 +391,10 @@ export default function Live2D({ modelPath, width = 400, height = 600, onModelRe
       if (containerRef.current) containerRef.current.style.display = "none";
       setReady(true);
     }
-  }, [modelPath, width, height, onModelReady]);
+    // init 只依赖 modelPath：width/height 变化由独立的 resize effect 处理，
+    // 避免窗口缩放时销毁并重新加载模型。onModelReady 在 Chat 中未传，无需追踪。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modelPath]);
 
   useEffect(() => {
     init();
@@ -390,6 +407,7 @@ export default function Live2D({ modelPath, width = 400, height = 600, onModelRe
         if (cleanup) cleanup();
         appRef.current.destroy(true, { children: true });
         appRef.current = null;
+        liveModelRef.current = null;
         console.log("[Live2D] app 已 destroy, appRef 已置 null");
       }
       // 清理容器内残留 canvas
@@ -399,6 +417,20 @@ export default function Live2D({ modelPath, width = 400, height = 600, onModelRe
       }
     };
   }, [init]);
+
+  // 窗口缩放时同步调整 canvas 尺寸 + 模型 scale/位置（不重新加载模型）
+  useEffect(() => {
+    sizeRef.current = { width, height };
+    const app = appRef.current;
+    const model = liveModelRef.current;
+    if (!app || !model) return;
+    app.renderer.resize(width, height);
+    app.stage.hitArea = app.screen; // 同步鼠标跟随范围
+    const scale = BASE_SCALE * (height / BASE_HEIGHT);
+    model.scale.set(scale);
+    model.x = app.screen.width / 2;
+    model.y = app.screen.height * 0.65;
+  }, [width, height]);
 
   return (
     <div

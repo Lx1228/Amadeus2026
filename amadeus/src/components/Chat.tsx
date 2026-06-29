@@ -48,6 +48,9 @@ export default function Chat() {
   const [ttsConfig, setTTSConfig] = useState<TTSConfig>(loadTTSConfig);
   const [playingMessageIndex, setPlayingMessageIndex] = useState<number | null>(null);
   const [bgmEnabled, setBgmEnabled] = useState(true);
+  // Live2D 立绘尺寸 + 背景图缩放：跟随窗口高度同步缩放（基准 900 高）
+  const [liveSize, setLiveSize] = useState({ width: 500, height: 900 });
+  const [scale, setScale] = useState(1);
   const pendingReplyRef = useRef(false);
   // 流式输出标志：LLM 逐字返回期间为 true，用来压制 TTS/情绪/session 保存等 effect
   // 避免每收到一个 chunk 就触发一次（会反复播 TTS / 反复写 session）
@@ -60,6 +63,17 @@ export default function Chat() {
   useEffect(() => {
     messagesRef.current = messages;
   }, [messages]);
+  // 窗口缩放时同步更新 Live2D 尺寸 + 背景图 scale（基准 900 高）
+  useEffect(() => {
+    const update = () => {
+      const h = window.innerHeight;
+      setLiveSize({ width: h * (500 / 900), height: h });
+      setScale(h / 900);
+    };
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
   // 加载 BGM 设置（客户端）
   useEffect(() => {
     const saved = localStorage.getItem("amadeus_bgm_enabled");
@@ -459,7 +473,7 @@ export default function Chat() {
   };
 
   return (
-    <div className="relative h-screen w-screen text-white" style={{ backgroundImage: 'url(/bg.png)', backgroundSize: 'cover', backgroundPosition: 'center', overflow: 'hidden' }}>
+    <div className="relative h-screen w-screen text-white" style={{ backgroundImage: 'url(/bg.png)', backgroundSize: `${1920 * scale}px ${1080 * scale}px`, backgroundPosition: 'center', backgroundRepeat: 'no-repeat', backgroundColor: '#000', overflow: 'hidden' }}>
       {/* 背景音乐：循环播放，切换会话或开关 BGM 时从头开始 */}
       <audio
         ref={(el) => { audioRef.current = el; }}
@@ -471,7 +485,7 @@ export default function Chat() {
 
       {/* 立绘全屏背景 */}
       <div className="absolute inset-0 flex items-end justify-center" style={{ paddingBottom: '0px' }}>
-        <Live2D modelPath="/live2d/kurisu/amadeusV1.model3.json" width={500} height={900} />
+        <Live2D modelPath="/live2d/kurisu/amadeusV1.model3.json" width={liveSize.width} height={liveSize.height} />
       </div>
 
       <header className="absolute top-0 left-0 right-0 p-4 flex items-center" style={{ zIndex: 30 }}>

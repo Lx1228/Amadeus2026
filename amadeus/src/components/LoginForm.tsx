@@ -21,6 +21,17 @@ export default function LoginForm() {
   const [password, setPassword] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
   const bgmRef = useRef<HTMLAudioElement | null>(null);
+  // 登录界面整体同步缩放：以 900px 高度为基准，scale 随窗口高度变化
+  // 最外层 div 设置 fontSize = baseFont * scale，内部所有 em 单位会跟着按比例缩放
+  const BASE_HEIGHT = 900;
+  const BASE_FONT = 16;
+  const [scale, setScale] = useState(1);
+  useEffect(() => {
+    const update = () => setScale(window.innerHeight / BASE_HEIGHT);
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
 
   // 浏览器自动播放策略：首次点击触发 BGM
   useEffect(() => {
@@ -73,6 +84,7 @@ export default function LoginForm() {
         minHeight: "100vh",
         position: "relative",
         overflow: "hidden",
+        fontSize: `${BASE_FONT * scale}px`,
       }}
     >
       <audio ref={bgmRef} src="/login.mp3" autoPlay loop />
@@ -96,8 +108,8 @@ export default function LoginForm() {
           height={80}
           totalFrames={38}
           loop={1}
-          displayWidth={520}
-          displayHeight={520}
+          displayWidth={520 * scale}
+          displayHeight={520 * scale}
         />
       </div>
 
@@ -198,7 +210,7 @@ export default function LoginForm() {
   );
 }
 
-// 标签样式：金色 + 发光阴影 + Cinzel serif
+// 标签样式：高光金黄 + 发光阴影 + Cinzel serif
 const labelStyle: React.CSSProperties = {
   transform: "translateY(0.26em)",
   marginRight: "1em",
@@ -207,26 +219,26 @@ const labelStyle: React.CSSProperties = {
   fontFamily: "'Cinzel', 'Times New Roman', serif",
   fontSize: "1.8em",
   fontWeight: 500,
-  color: "#f7c947",
+  color: "#F2B03A",
   letterSpacing: "3px",
   marginBottom: "0.4em",
   textShadow:
-    "0 0 6px rgba(247, 201, 71, 0.8), 0 0 14px rgba(247, 201, 71, 0.5), 0 0 24px rgba(0, 0, 0, 0.9)",
+    "0 0 6px rgba(224, 85, 30, 0.8), 0 0 14px rgba(209, 139, 36, 0.5), 0 0 24px rgba(0, 0, 0, 0.9)",
   whiteSpace: "nowrap",
 };
 
-// 输入框样式：黑底灰边 + 金色文字 + Consolas 等宽
+// 输入框样式：黑底古铜黄边 + 高光金黄文字 + Consolas 等宽
 const inputStyle: React.CSSProperties = {
   width: "20em",
   height: "1.6em",
   background: "#000000",
-  border: "2px solid #aaa9ab",
-  color: "#f7c947",
+  border: "2px solid #D18B24",
+  color: "#F2B03A",
   padding: "0 1rem",
   fontFamily: "'Consolas', 'monospace'",
   fontSize: "1.8em",
   letterSpacing: "2px",
   outline: "none",
-  boxShadow: "0 0 15px rgba(0, 0, 0, 0.8)",
+  boxShadow: "0 0 15px rgba(224, 85, 30, 0.5)",
   boxSizing: "content-box",
 };

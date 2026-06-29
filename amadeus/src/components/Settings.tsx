@@ -215,7 +215,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                 onClick={() => setActiveTab(item.id)}
                 className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-mono transition-colors ${
                   activeTab === item.id
-                    ? "bg-emerald-900/50 text-emerald-400"
+                    ? "bg-[#8C4F14]/50 text-[#F2B03A]"
                     : "text-zinc-400 hover:bg-zinc-800 hover:text-white"
                 }`}
               >
@@ -228,7 +228,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
         {/* 右侧内容 */}
         <div className="flex-1 flex flex-col">
           <div className="flex items-center justify-between p-4 border-b border-zinc-800">
-            <h2 className="text-lg font-mono text-emerald-400">
+            <h2 className="text-lg font-mono text-[#F2B03A]">
               {activeTab === "chat-model" ? "Chat模型" : activeTab === "tts" ? "语音合成" : activeTab === "memory" ? "会话管理" : "通用设置"}
             </h2>
             <div className="flex gap-2">
@@ -328,7 +328,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                         notifyChange();
                         showToast(`API Key 已保存（${config.apiKey.length} 字符）`);
                       }}
-                      className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-mono text-sm whitespace-nowrap"
+                      className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm whitespace-nowrap"
                     >
                       保存
                     </button>
@@ -386,7 +386,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                       showToast(updated.enabled ? "语音合成已开启" : "语音合成已关闭");
                     }}
                     className={`w-12 h-6 rounded-full transition-colors relative ${
-                      ttsConfig.enabled ? "bg-emerald-600" : "bg-zinc-700"
+                      ttsConfig.enabled ? "bg-[#D18B24]" : "bg-zinc-700"
                     }`}
                   >
                     <div
@@ -457,7 +457,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                             notifyChange();
                             showToast(`阿里云 Key 已保存（${trimmed.length} 字符）`);
                           }}
-                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-mono text-sm whitespace-nowrap"
+                          className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm whitespace-nowrap"
                         >
                           保存
                         </button>
@@ -513,7 +513,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                             notifyChange();
                             showToast(trimmed ? "音色 ID 已保存" : "已清空，将使用默认音色");
                           }}
-                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-mono text-sm whitespace-nowrap"
+                          className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm whitespace-nowrap"
                         >
                           保存
                         </button>
@@ -558,7 +558,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                             notifyChange();
                             showToast(`MiniMax Key 已保存（${trimmed.length} 字符）`);
                           }}
-                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-mono text-sm whitespace-nowrap"
+                          className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm whitespace-nowrap"
                         >
                           保存
                         </button>
@@ -608,7 +608,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                             notifyChange();
                             showToast(trimmed ? "音色 ID 已保存" : "已清空，将使用默认音色");
                           }}
-                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-mono text-sm whitespace-nowrap"
+                          className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm whitespace-nowrap"
                         >
                           保存
                         </button>
@@ -686,7 +686,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                             notifyChange();
                             showToast(`自定义 Key 已保存（${trimmed.length} 字符）`);
                           }}
-                          className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-mono text-sm whitespace-nowrap"
+                          className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm whitespace-nowrap"
                         >
                           保存
                         </button>
@@ -700,7 +700,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                 {/* TTS 设置保存按钮 */}
                 <div className="flex justify-end pt-4 border-t border-zinc-800 gap-2">
                   <button
-                    className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-mono text-sm"
+                    className="px-4 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm"
                     onClick={() => {
                       // trim 掉复制时可能带入的空格/换行符
                       const trimmedAliyun = aliyunKey.trim();
@@ -735,7 +735,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                 <div className="flex items-center justify-between mb-4">
                   <button
                     onClick={() => setShowNewSessionInput(true)}
-                    className="text-xs text-emerald-400 hover:text-emerald-300 font-mono"
+                    className="text-xs text-[#F2B03A] hover:text-[#F2B03A] font-mono"
                   >
                     + 新开会话
                   </button>
@@ -760,7 +760,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                     />
                     <button
                       onClick={handleNewSession}
-                      className="px-3 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-mono text-sm"
+                      className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm"
                     >
                       创建
                     </button>
@@ -779,7 +779,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                       key={session.id}
                       className={`p-3 rounded-lg border cursor-pointer transition-colors ${
                         session.id === activeSessionId
-                          ? "bg-emerald-900/30 border-emerald-700"
+                          ? "bg-[#8C4F14]/30 border-[#8C4F14]"
                           : "bg-zinc-800/50 border-zinc-700 hover:border-zinc-600"
                       }`}
                       onClick={() => handleSwitchSession(session.id)}
@@ -843,7 +843,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                             </button>
                           )}
                           {session.id === activeSessionId && (
-                            <span className="text-xs font-mono text-emerald-400">已选择</span>
+                            <span className="text-xs font-mono text-[#F2B03A]">已选择</span>
                           )}
                         </div>
                       </div>
@@ -893,7 +893,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                       showToast(next ? "背景音乐已开启" : "背景音乐已关闭");
                     }}
                     className={`w-12 h-6 rounded-full transition-colors relative ${
-                      bgmEnabled ? "bg-emerald-600" : "bg-zinc-700"
+                      bgmEnabled ? "bg-[#D18B24]" : "bg-zinc-700"
                     }`}
                   >
                     <div
@@ -910,7 +910,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
       </div>
 
       {toast && (
-        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 translate-y-[268px] z-[60] px-4 py-2 bg-emerald-900/90 border border-emerald-600 rounded-lg text-sm font-mono text-emerald-300 text-center animate-pulse shadow-lg">
+        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 translate-y-[268px] z-[60] px-4 py-2 bg-[#8C4F14]/90 border border-[#D18B24] rounded-lg text-sm font-mono text-[#F2B03A] text-center animate-pulse shadow-lg">
           {toast}
         </div>
       )}

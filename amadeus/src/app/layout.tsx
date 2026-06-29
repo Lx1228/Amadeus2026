@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Amadeus",
-  description: "牧濑红莉栖的记忆体 — 数字伴侣",
+  description: "Amadeus — 数字伴侣",
 };
 
 export default function RootLayout({

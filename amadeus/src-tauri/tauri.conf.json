@@ -4,24 +4,12 @@
   "version": "1.0.0",
   "identifier": "com.amadeus.kurisu",
   "build": {
-    "frontendDist": "../out",
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": "npx next start",
-    "beforeBuildCommand": "npm run build"
+    "beforeBuildCommand": "npm run build && node scripts/build-for-tauri.mjs"
   },
   "app": {
-    "windows": [
-      {
-        "title": "Amadeus",
-        "width": 1280,
-        "height": 800,
-        "minWidth": 800,
-        "minHeight": 600,
-        "center": true,
-        "resizable": true,
-        "fullscreen": false
-      }
-    ],
+    "windows": [],
     "security": {
       "csp": null
     }
@@ -37,7 +25,7 @@
       "icons/icon.ico"
     ],
     "resources": [
-      "../public/**/*"
+      "../.next/standalone/**/*"
     ]
   }
 }

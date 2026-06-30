@@ -83,7 +83,8 @@ export default function LoginForm() {
         backgroundRepeat: "no-repeat",
         minHeight: "100vh",
         position: "relative",
-        overflow: "hidden",
+        overflowX: "visible",
+        overflowY: "hidden",
         fontSize: `${BASE_FONT * scale}px`,
       }}
     >
@@ -113,7 +114,7 @@ export default function LoginForm() {
         />
       </div>
 
-      {/* 输入组：USER ID / PASSWORD + 按钮 */}
+      {/* 输入组：USER ID / PASSWORD（保持最初的布局） */}
       <div
         style={{
           position: "absolute",
@@ -169,6 +170,7 @@ export default function LoginForm() {
             cursor: "pointer",
             outline: "none",
             transform: "translateY(1.5em)",
+            flexShrink: 0,
           }}
           onMouseEnter={(e) => {
             const img = e.currentTarget.querySelector("img");
@@ -184,6 +186,7 @@ export default function LoginForm() {
             alt="登录"
             style={{
               width: "2.8em",
+              height: "2.8em",
               transition: "transform 0.2s cubic-bezier(.4, 2, .3, 1)",
             }}
           />

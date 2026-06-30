@@ -176,7 +176,18 @@ export async function POST(request: Request) {
       }
 
       if (engine === "qwen3-tts-vc") {
-        // Qwen3-TTS-VC (different endpoint)
+        // Qwen3-TTS-VC (声音复刻音色合成)
+        // 重要：model 必须与克隆时的 target_model 完全一致
+        // 用 qwen3-tts-vc-2026-01-22（非实时，HTTP 兼容）
+        // 不能用 qwen3-tts-vc-realtime-* 系列（只能 WebSocket）
+        // 注意：不要传 language_type，VC 模型不支持该参数（会报 InvalidParameter）
+        if (!voiceId) {
+          return NextResponse.json(
+            { error: "Qwen3-TTS-VC 需要音色名：请先点「一键克隆」，或在音色 ID 框填入" },
+            { status: 400 }
+          );
+        }
+        console.log(`[TTS route] Qwen3-TTS-VC 合成: voice=${voiceId}, text=${text.slice(0, 30)}`);
         const synthUrl =
           "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation";
         const res = await fetch(synthUrl, {
@@ -187,7 +198,11 @@ export async function POST(request: Request) {
           },
           body: JSON.stringify({
             model: "qwen3-tts-vc-2026-01-22",
-            input: { text, voice: voiceId },
+            input: {
+              text,
+              voice: voiceId,
+              language_type: "Japanese",
+            },
           }),
         });
 
@@ -195,15 +210,19 @@ export async function POST(request: Request) {
           const errText = await res.text();
           console.error("[TTS] Qwen3-TTS-VC 错误:", res.status, errText);
           return NextResponse.json(
-            { error: `Qwen3-TTS-VC 返回 ${res.status}：${errText.slice(0, 200)}` },
+            { error: `Qwen3-TTS-VC 返回 ${res.status}：${errText.slice(0, 300)}` },
             { status: 502 }
           );
         }
 
         const data = await res.json();
+        console.log("[TTS] Qwen3-TTS-VC 返回:", JSON.stringify(data).slice(0, 400));
         const audioUrl = data?.output?.audio?.url;
         if (!audioUrl) {
-          return NextResponse.json({ error: "Qwen3-TTS-VC 未返回音频" }, { status: 500 });
+          return NextResponse.json(
+            { error: `Qwen3-TTS-VC 未返回音频，完整返回: ${JSON.stringify(data).slice(0, 300)}` },
+            { status: 500 }
+          );
         }
 
         const audioRes = await fetch(audioUrl);

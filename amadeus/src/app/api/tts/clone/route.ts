@@ -59,7 +59,7 @@ export async function POST(request: Request) {
         model: "qwen-voice-enrollment",
         input: {
           action: "create",
-          target_model: "qwen3-tts-vc-realtime-2026-01-15",
+          target_model: "qwen3-tts-vc-2026-01-22",
           preferred_name: "amadeus_kurisu",
           audio: { data: dataUrl },
           language: "ja", // 红莉栖音色样本是日语

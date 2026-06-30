@@ -71,14 +71,25 @@ npm run build
 npx tauri dev
 ```
 
+开发模式下 Next.js server 和 Tauri 窗口分开运行（端口 3000）。
+
 ### 生产模式（打包安装包）
 
 ```bash
-npm run build
 npx tauri build
 ```
 
-打包完成后在 `src-tauri/target/release/bundle/` 目录找到安装包。
+这一条命令会自动完成：
+1. `next build`（生成 standalone 输出）
+2. `node scripts/build-for-tauri.mjs`（组装 standalone 目录 + 复制 node.exe）
+3. Rust release 编译
+4. 生成 .msi 安装包
+
+打包完成后在 `src-tauri/target/release/bundle/msi/` 目录找到安装包。
+
+**安装包架构**：Tauri 把 Node.js 运行时 + Next.js standalone 服务器打包进安装包。用户双击安装后，桌面快捷方式打开应用时，Tauri 在后台静默启动 Node.js 服务器（无控制台窗口），用户只看到一个应用窗口。关闭窗口时自动终止服务器进程。
+
+安装包约 120MB（含 Node.js 运行时 ~80MB + 应用 ~30MB + Tauri 二进制 ~10MB）。
 
 ## 技术栈
 

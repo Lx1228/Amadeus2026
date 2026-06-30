@@ -558,6 +558,8 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                         )}
                       </div>
                     </div>
+                    {/* TTS 测试按钮已移除：切换引擎后固定文本会因音色不匹配报错，
+                        实际效果请直接在聊天界面发消息测试 */}
                     <div>
                       <label className="block text-xs text-zinc-400 mb-1 font-mono">音色 ID（可选）</label>
                       <div className="flex gap-2">

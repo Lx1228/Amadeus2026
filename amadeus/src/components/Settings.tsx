@@ -12,6 +12,7 @@ import {
   loadMiniMaxVoiceId, saveMiniMaxVoiceId,
   loadTTSEngine, saveTTSEngine, TTSEngine,
   loadCustomTTS, saveCustomTTS,
+  cloneKurisuVoice, isVoiceCloned, setVoiceCloned, clearVoiceCloned, loadClonedVoice,
 } from "@/lib/tts";
 import { setSessionLoggedIn } from "@/lib/auth";
 
@@ -100,6 +101,8 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
     custom: false,
   });
   const [toast, setToast] = useState<string | null>(null);
+  const [cloning, setCloning] = useState(false);
+  const [voiceCloned, setVoiceClonedState] = useState(false);
   const [bgmEnabled, setBgmEnabled] = useState(() => {
     if (typeof window === "undefined") return true;
     const saved = localStorage.getItem("amadeus_bgm_enabled");
@@ -118,6 +121,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
     setTTSProvider(loadTTSProvider());
     setTTSEngine(loadTTSEngine());
     setCustomTTS(loadCustomTTS());
+    setVoiceClonedState(isVoiceCloned());
   }, [open]);
 
   if (!open) return null;
@@ -495,6 +499,66 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                       <p className="text-xs text-zinc-600 mt-1">"指令控制"会根据语境自动调节语气</p>
                     </div>
                     <div>
+                      <label className="block text-xs text-zinc-400 mb-1 font-mono">一键克隆红莉栖音色</label>
+                      <div className="bg-zinc-800/50 border border-[#8C4F14] rounded-lg p-3">
+                        <p className="text-xs text-zinc-400 mb-2 leading-relaxed">
+                          {voiceCloned
+                            ? `已克隆，音色名：${loadClonedVoice() || "（未知）"}。引擎已自动切到 Qwen3-TTS-VC。`
+                            : "内置红莉栖音色样本，填好上方 API Key 后点下方按钮，自动克隆到你的阿里云账号。无需手动去控制台操作。"}
+                        </p>
+                        <div className="flex gap-2">
+                          <button
+                            disabled={cloning || !aliyunKey.trim()}
+                            onClick={async () => {
+                              const key = aliyunKey.trim();
+                              if (!key) { showToast("请先填写并保存阿里云 API Key"); return; }
+                              setCloning(true);
+                              try {
+                                showToast("正在克隆音色，约需 5-15 秒...");
+                                const { voice, fallbackMode } = await cloneKurisuVoice(key);
+                                setVoiceCloned(voice);
+                                setVoiceClonedState(true);
+                                // 自动切到 qwen3-tts-vc 引擎（克隆音色只能配合这个引擎）
+                                setTTSEngine("qwen3-tts-vc");
+                                saveTTSEngine("qwen3-tts-vc");
+                                // 清空手填的 voiceId（用克隆的）
+                                setAliyunVoiceId("");
+                                saveAliyunVoiceId("");
+                                notifyChange();
+                                showToast(fallbackMode
+                                  ? `克隆成功（降级模式）：${voice}。建议换更清晰的样本重试。`
+                                  : `克隆成功！音色名：${voice}。引擎已切到 Qwen3-TTS-VC。`);
+                              } catch (e) {
+                                showToast(`克隆失败：${e instanceof Error ? e.message : "未知错误"}`);
+                              } finally {
+                                setCloning(false);
+                              }
+                            }}
+                            className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg font-mono text-sm whitespace-nowrap transition-colors"
+                          >
+                            {cloning ? "克隆中..." : voiceCloned ? "重新克隆" : "一键克隆"}
+                          </button>
+                          {voiceCloned && (
+                            <button
+                              onClick={() => {
+                                clearVoiceCloned();
+                                setVoiceClonedState(false);
+                                showToast("已清除克隆标记，可重新克隆");
+                              }}
+                              className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded-lg font-mono text-sm whitespace-nowrap"
+                            >
+                              清除标记
+                            </button>
+                          )}
+                        </div>
+                        {voiceCloned && (
+                          <p className="text-xs text-[#F2B03A] mt-2">
+                            ✓ 已克隆。现在直接去聊天，红莉栖就能说话了。
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                    <div>
                       <label className="block text-xs text-zinc-400 mb-1 font-mono">音色 ID（可选）</label>
                       <div className="flex gap-2">
                         <input
@@ -519,8 +583,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                         </button>
                       </div>
                       <p className="text-xs text-zinc-600 mt-1">
-                        在阿里云百炼控制台「声音克隆」克隆音色后，把得到的音色 ID 填这里。
-                        仓库 public/voice_sample.mp3 是红莉栖音色样本，可直接用于克隆。
+                        留空用一键克隆的音色。如想用 CosyVoice 引擎（音质更好），需自行到阿里云控制台用 public/voice_sample.mp3 克隆，把得到的 ID 填这里。
                       </p>
                     </div>
                   </>

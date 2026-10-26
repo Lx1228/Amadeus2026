@@ -1,15 +1,18 @@
 # Amadeus - 命运石之门数字伴侣
 
-基于《命运石之门》角色的数字伴侣应用，支持三个角色：牧濑红莉栖、比屋定真帆、椎名真由理。通过 Live2D 模型、LLM 聊天和 TTS 语音合成，打造可以对话的 AI 角色。
+基于《命运石之门》角色的数字伴侣应用，支持三个角色：牧濑红莉栖、比屋定真帆、椎名真由理。通过 Live2D 模型、LLM 聊天与 TTS 语音合成，打造可以对话的 AI 角色。
 
 ## 功能特性
 
 - 🎭 **多角色系统** - 三个角色（红莉栖/真帆/真由理），输入不同账号密码加载不同角色
-- 💬 **LLM 对话** - 支持 MiMo、DeepSeek 等 OpenAI 兼容 API，流式输出
-- 🔊 **TTS 语音** - 一键克隆音色，每个角色有独立声音
-- 😊 **情绪系统** - 5 种情绪驱动 Live2D 表情
-- 📝 **会话管理** - 多会话、会话压缩、记忆提取，按角色隔离
-- 🖥️ **桌面应用** - 基于 Tauri，双击安装即用，无控制台黑框
+- 💬 **LLM 对话** - 内置小米 MiMo、DeepSeek 模型，也支持自定义 OpenAI 兼容接口，流式输出
+- 🔊 **语音合成** - 云端语音（阿里云百炼 CosyVoice），填入自己的 API Key、一键复刻三角色音色，回复自动朗读
+- 🗨️ **口癖原声** - 嘟嘟噜等标志性台词直接播放原声片段
+- 🖼️ **图片与文档发送** - 支持图片、txt / md 文本文件，AI 直接读取内容
+- 😊 **情感系统** - 5 种情绪驱动 Live2D 表情
+- 🗂️ **会话管理** - 每个角色一个会话，自动记忆整理，支持导出聊天记录到 TXT
+- 🪵 **运行日志** - 内置日志面板，后台状态与报错实时可见
+- 🖥️ **桌面应用** - 基于 Tauri，自绘标题栏 + 系统托盘，双击安装即用
 
 ## 角色账号
 
@@ -23,9 +26,17 @@
 
 ## 下载安装
 
-直接从 [GitHub Release](https://github.com/Lx1228/Amadeus2026/releases) 下载安装包，双击安装即可。
+直接从 [GitHub Release](https://github.com/Lx1228/Amadeus2026/releases) 下载安装包，双击覆盖安装即可。
 
-无需安装 Node.js 或其他依赖，安装包已内置运行时。
+无需安装 Node.js 或其他依赖，安装包已内置运行时；升级不会丢失聊天记录。
+
+## 语音配置（三步）
+
+1. 注册**阿里云百炼**账号，拿到 API Key
+2. Amadeus → 设置 → 语音合成 → 粘贴 API Key
+3. 点「一键复刻三个角色」→ 打开「启用」开关
+
+复刻完全免费，只有之后每句合成按字符计费（0.8 元 / 万字符）。不填 Key 一切正常，只是她不说话。
 
 ## 快速开始（开发者）
 
@@ -68,40 +79,12 @@ npx tauri dev
 登录后点击右上角齿轮图标进入设置：
 
 1. **Chat 模型** - 选择模型提供商，填入 API Key
-   - MiMo: https://api.xiaomimimo.com
-   - DeepSeek: https://api.deepseek.com
-   - 或其他 OpenAI 兼容 API
+   - 内置：小米 MiMo、DeepSeek
+   - 或自定义 OpenAI 兼容接口（地址和模型名自己填）
 
-2. **语音合成** - 填入阿里云 API Key，点「一键克隆」即可
-
-## 语音音色
-
-每个角色内置了对应的音色样本，**只需填 API Key 即可一键克隆，无需手动去控制台操作**。
-
-### 阿里云百炼（推荐）
-
-1. 注册阿里云账号，开通「百炼」服务：https://bailian.console.aliyun.com/
-2. 获取 API Key（控制台首页 → API-KEY 管理）
-3. 打开 Amadeus 应用 → 设置 → 语音合成 → 阿里云百炼
-4. 填入阿里云 API Key，点「保存」
-5. 点「**一键克隆**」按钮（自动用内置音色样本克隆到你的账号，约 5-15 秒）
-6. 克隆成功后引擎会自动切到 Qwen3-TTS-VC，直接去聊天就能听到声音
-
-**每个角色只需克隆一次**，以后切换账号不用重新克隆。三个角色共享同一个阿里云 API Key。
-
-> 一键克隆用的是 Qwen3-TTS-VC 引擎（支持 base64 上传音频，无需公网 URL）。
-> 如果想用 CosyVoice 引擎，需要自行到阿里云控制台手动克隆（CosyVoice 要求音频公网 URL），然后把音色 ID 填到设置里。
-
-### MiniMax
-
-1. 注册 MiniMax 账号：https://www.minimaxi.com/
-2. 进入控制台 → 「声音复刻」
-3. 上传对应角色的音色样本克隆
-4. 得到音色 ID 后填入设置
+2. **语音合成** - 填入阿里云百炼 API Key，点「一键复刻三个角色」
 
 ## 构建桌面应用
-
-### 生产模式（打包安装包）
 
 ```bash
 npx tauri build
@@ -115,9 +98,7 @@ npx tauri build
 
 打包完成后在 `src-tauri/target/release/bundle/nsis/` 目录找到安装包。
 
-**安装包架构**：Tauri 把 Node.js 运行时 + Next.js standalone 服务器打包进安装包。用户双击安装后，桌面快捷方式打开应用时，Tauri 在后台静默启动 Node.js 服务器（无控制台窗口），用户只看到一个应用窗口。关闭窗口时自动终止服务器进程。
-
-安装包约 34MB（NSIS 压缩后）。
+**安装包架构**：Tauri 把 Node.js 运行时 + Next.js standalone 服务器打包进安装包。用户双击安装后，桌面快捷方式打开应用时，Tauri 在后台静默启动 Node.js 服务器（无控制台窗口），用户只看到一个应用窗口。
 
 ## 技术栈
 
@@ -125,7 +106,7 @@ npx tauri build
 - **桌面**: Tauri 2 (Rust)
 - **Live2D**: pixi.js + pixi-live2d-display
 - **LLM**: OpenAI 兼容 API
-- **TTS**: 阿里云 Qwen3-TTS-VC / CosyVoice / MiniMax
+- **TTS**: 阿里云百炼 CosyVoice（cosyvoice-v3.5-flash）
 
 ## 项目结构
 
@@ -135,17 +116,20 @@ amadeus/
 │   ├── app/               # Next.js 页面和 API 路由
 │   │   └── api/
 │   │       ├── chat/      # LLM 对话接口
-│   │       └── tts/       # TTS 合成 + 一键克隆接口
-│   ├── components/         # React 组件（Chat, Live2D, Settings, LoginForm）
+│   │       ├── sessions/  # 会话备份与归档
+│   │       ├── tts/       # 云端语音合成 + 音色复刻
+│   │       └── app-logs/  # 运行日志
+│   ├── components/         # React 组件（Chat, Live2D, Settings, WindowBar, RuntimeLogPanel）
 │   └── lib/               # 工具库
 │       ├── characters.ts   # 角色配置（多角色系统）
-│       ├── tts.ts          # TTS 合成 + 克隆
-│       ├── sessions.ts     # 会话管理（按角色隔离）
-│       ├── auth.ts         # 登录态 + 角色切换
+│       ├── tts.ts          # 语音合成（云端）
+│       ├── cloud-tts.ts    # 云端语音配置
+│       ├── sessions.ts     # 会话管理（按角色隔离 + 单会话迁移）
+│       ├── catchphrase.ts  # 口癖原声匹配
 │       └── ...
 ├── public/
 │   ├── live2d/            # Live2D 模型（kurisu/maho/MAY）
-│   ├── voice_sample*.mp3  # 各角色音色样本
+│   ├── clips/             # 口癖原声片段
 │   └── ...
 ├── scripts/
 │   └── build-for-tauri.mjs # 打包脚本
@@ -167,22 +151,19 @@ amadeus/
 ## 常见问题
 
 ### Q: 启动后页面空白？
-A: 检查浏览器控制台是否有错误，通常是 API Key 未配置或模型文件缺失。
+A: 通常是 API Key 未配置或模型文件缺失，进设置页检查聊天模型配置。
 
-### Q: TTS 没有声音？
-A: 1) 确认已点「一键克隆」；2) 确认 TTS 开关已开启；3) 确认引擎是 Qwen3-TTS-VC。
+### Q: 她怎么不说话？
+A: 三步：设置 → 语音合成 → 填百炼 API Key → 点「一键复刻三个角色」→ 打开「启用」开关。还不行就看 设置 → 运行日志 的报错。
 
-### Q: 一键克隆失败？
-A: 常见原因：1) API Key 未填或无效；2) 阿里云账号未实名认证；3) 声音复刻服务未开通。可点「清除标记」后重试。
-
-### Q: 切换角色后声音还是红莉栖的？
-A: 每个角色需要各自点一次「一键克隆」。如果已克隆还串音色，确认引擎是 Qwen3-TTS-VC（不要切到 CosyVoice）。
+### Q: 音色复刻失败？
+A: 常见原因：API Key 无效、阿里云账号未实名、账号额度不足。修正后重试即可。
 
 ### Q: 升级版本会丢聊天记录吗？
-A: 直接覆盖安装不会丢。不要卸载旧版。聊天记录存在 `%LOCALAPPDATA%\com.amadeus.kurisu\EBWebView\` 里。
+A: 覆盖安装不会丢。不要卸载旧版。聊天记录存在 `%LOCALAPPDATA%\com.amadeus.kurisu\EBWebView\` 里，并有自动备份。
 
 ### Q: 三个角色的聊天记录是分开的吗？
-A: 是的，完全隔离。切角色等于切账号，互不影响。
+A: 是的，完全隔离。切角色等于切账号，互不影响。每个角色保留一个会话。
 
 ## 相关项目
 

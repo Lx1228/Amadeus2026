@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { DEFAULT_PERSONALITY } from "@/lib/personality";
+import { selectFactsForPrompt } from "@/lib/memory";
 
 export async function POST(request: Request) {
   try {
@@ -10,17 +11,18 @@ export async function POST(request: Request) {
     }
 
     // 构建记忆上下文（截断注入：只发最近的，避免 input token 膨胀）
-    // - fact：最多 5 条最新的
-    // - summary：最多 1 条最新的（旧摘要已被新摘要覆盖，没必要全发）
+    // - fact：2026-10-25 改成「全量去重 + 预算内取舍」，以前是只发最近 5 条，
+    //   聊久了早期身份信息会被挤掉（见 lib/memory.ts 的 selectFactsForPrompt）
+    // - summary：最多 1 条最新的（每次摘要都会把旧摘要一起滚进去，所以一条就够）
     // - emotion：不发（性格倾向已在人设里，重复发浪费 token）
     let memoryContext = "";
     if (memories && memories.length > 0) {
-      const facts = memories.filter((m: { type: string }) => m.type === "fact").slice(-5);
+      const facts = selectFactsForPrompt(memories);
       const summaries = memories.filter((m: { type: string }) => m.type === "summary").slice(-1);
 
       const parts: string[] = [];
       if (facts.length > 0) {
-        parts.push("事实：" + facts.map((m: { content: string }) => m.content).join("；"));
+        parts.push("事实：" + facts.join("；"));
       }
       if (summaries.length > 0) {
         parts.push("过往对话摘要：" + summaries.map((m: { content: string }) => m.content).join("；"));

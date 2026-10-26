@@ -1,11 +1,19 @@
 import { NextResponse } from "next/server";
+import { log } from "@/lib/debug-log";
 
 /**
  * 纯 LLM 诊断端点：绕过所有应用逻辑（人设/history/memory/格式解析），
  * 用最小 payload 直接打 MiMo，测真实响应时间。
  *
+ * ⚠️ 这是开发调试工具，没有任何前端调用它，只在需要手动 curl 时使用。
+ * 用途：区分「LLM 慢」还是「应用层慢」——如果这个端点也慢，
+ * 说明是模型/API 的问题，跟 Next.js 转发无关。
+ *
  * 用法：POST /api/diag/llm  body: { endpoint, apiKey, model, stream?: bool }
  * 返回：{ fetchMs, firstChunkMs, totalMs, chars, content }
+ *
+ * 注：这里的日志走 log()，生产模式下不输出（避免泄露 API Key 相关信息）。
+ * 同类独立脚本：scripts/test-llm-latency.mjs（绕过 Next.js 直连，更干净）
  */
 export async function POST(request: Request) {
   const { endpoint, apiKey, model, stream = false } = await request.json();
@@ -41,7 +49,7 @@ export async function POST(request: Request) {
     });
 
     const fetchMs = Date.now() - t0;
-    console.log(`[DIAG] payload ${payloadSize} bytes, fetch 返回 ${fetchMs}ms, status ${res.status}`);
+    log(`[DIAG] payload ${payloadSize} bytes, fetch 返回 ${fetchMs}ms, status ${res.status}`);
 
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
@@ -61,7 +69,7 @@ export async function POST(request: Request) {
         if (done) break;
         if (!firstChunkMs) {
           firstChunkMs = Date.now() - t0;
-          console.log(`[DIAG] stream 首 chunk: ${firstChunkMs}ms (fetch→首chunk: ${firstChunkMs - fetchMs}ms)`);
+          log(`[DIAG] stream 首 chunk: ${firstChunkMs}ms (fetch→首chunk: ${firstChunkMs - fetchMs}ms)`);
         }
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
@@ -80,14 +88,14 @@ export async function POST(request: Request) {
       }
 
       const totalMs = Date.now() - t0;
-      console.log(`[DIAG] stream 完成: 总 ${totalMs}ms, ${totalChars} 字符, 首→末: ${totalMs - firstChunkMs}ms`);
+      log(`[DIAG] stream 完成: 总 ${totalMs}ms, ${totalChars} 字符, 首→末: ${totalMs - firstChunkMs}ms`);
       return NextResponse.json({ fetchMs, firstChunkMs, totalMs, chars: totalChars, payloadSize, stream: true });
     } else {
       // 非流式
       const data = await res.json();
       const totalMs = Date.now() - t0;
       const content = data.choices?.[0]?.message?.content || "";
-      console.log(`[DIAG] 非流式完成: 总 ${totalMs}ms, ${content.length} 字符`);
+      log(`[DIAG] 非流式完成: 总 ${totalMs}ms, ${content.length} 字符`);
       return NextResponse.json({ fetchMs, totalMs, chars: content.length, content: content.slice(0, 100), payloadSize, stream: false });
     }
   } catch (error: unknown) {

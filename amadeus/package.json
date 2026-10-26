@@ -1,6 +1,6 @@
 {
   "name": "amadeus",
-  "version": "2.2.0",
+  "version": "3.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
@@ -10,6 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@tauri-apps/api": "2.11.1",
     "next": "16.2.9",
     "pixi-live2d-display": "^0.5.0-beta",
     "pixi.js": "^7.4.3",

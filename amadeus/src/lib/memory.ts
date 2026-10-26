@@ -5,35 +5,52 @@ export interface MemoryEntry {
   type: "fact" | "emotion" | "summary";
 }
 
-const MEMORY_KEY = "amadeus_memories";
+/** 事实记忆注入的总字符预算（大概 600~800 token 量级） */
+const FACT_BUDGET_CHARS = 2000;
 
-export function loadMemories(): MemoryEntry[] {
-  if (typeof window === "undefined") return [];
-  const saved = localStorage.getItem(MEMORY_KEY);
-  return saved ? JSON.parse(saved) : [];
+/**
+ * 挑选要注入 prompt 的事实记忆（2026-10-25）
+ *
+ * 以前 api/chat/route.ts 里是 `facts.slice(-5)` —— 只发最近 5 条。
+ * 聊得越久记忆攒得越多，早期那条"我叫什么、什么职业"会被后来的琐事挤出去，
+ * 表现就是"它不记得我了"。
+ *
+ * 现在的策略：全部注入（去重），只在超出字符预算时做取舍 ——
+ * 保留最早的 20%（通常是身份类信息，最重要）+ 尽可能多的最新记忆。
+ */
+export function selectFactsForPrompt(
+  memories: { content: string; type: string }[]
+): string[] {
+  const seen = new Set<string>();
+  const facts: string[] = [];
+  for (const m of memories) {
+    if (m.type !== "fact") continue;
+    const c = (m.content || "").trim();
+    if (!c || seen.has(c)) continue; // 去重：同一条事实被反复提取很常见
+    seen.add(c);
+    facts.push(c);
+  }
+
+  const cost = (list: string[]) => list.reduce((n, f) => n + f.length + 1, 0);
+  if (cost(facts) <= FACT_BUDGET_CHARS) return facts;
+
+  const headCount = Math.max(1, Math.floor(facts.length * 0.2));
+  const head = facts.slice(0, headCount);
+  let used = cost(head);
+  const tail: string[] = [];
+  for (let i = facts.length - 1; i >= headCount; i--) {
+    const c = facts[i].length + 1;
+    if (used + c > FACT_BUDGET_CHARS) break;
+    tail.unshift(facts[i]);
+    used += c;
+  }
+  return [...head, ...tail];
 }
 
-export function saveMemories(memories: MemoryEntry[]) {
-  localStorage.setItem(MEMORY_KEY, JSON.stringify(memories));
-}
-
-export function addMemory(content: string, type: MemoryEntry["type"] = "fact") {
-  const memories = loadMemories();
-  const newMemory: MemoryEntry = {
-    id: Date.now().toString(),
-    content,
-    timestamp: Date.now(),
-    type,
-  };
-  memories.push(newMemory);
-  saveMemories(memories);
-  return newMemory;
-}
-
-export function deleteMemory(id: string) {
-  const memories = loadMemories().filter((m) => m.id !== id);
-  saveMemories(memories);
-}
+// 注意：记忆数据实际存在 session 里（见 sessions.ts 的 Session.memories），
+// 早期版本这里还有一套 localStorage 读写（loadMemories/saveMemories/
+// addMemory/deleteMemory/compressOldMemories），已被 session 方案取代，
+// 2026-10-12 清理时删除。
 
 const EXTRACT_PROMPT = `分析以下对话，提取需要长期记住的关键信息。
 
@@ -73,22 +90,24 @@ export async function extractMemories(
     .join("\n");
 
   try {
-    const res = await fetch(`${config.endpoint}/chat/completions`, {
+    // 2026-10-25：改走服务端代理 /api/llm，不再浏览器直连用户的 endpoint。
+    // 直连时自定义接口没有 CORS 头会被浏览器拦掉，表现为记忆静默失效。
+    const res = await fetch("/api/llm", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
+        endpoint: config.endpoint,
+        apiKey: config.apiKey,
         model: config.model,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 512,
+        prompt,
+        maxTokens: 512,
       }),
     });
+    if (!res.ok) return [];
     const data = await res.json();
-    if (data.error) return [];
+    const text: string = data?.text || "";
+    if (!text) return [];
 
-    const text = data.choices[0].message.content;
     return text
       .split("\n")
       .filter((line: string) => line.trim().startsWith("- ["))
@@ -96,75 +115,5 @@ export async function extractMemories(
       .filter(Boolean);
   } catch {
     return [];
-  }
-}
-
-const MAX_MEMORIES = 100;
-const COMPRESS_AGE_DAYS = 7;
-
-const COMPRESS_PROMPT = `将以下多条记忆压缩成一条简洁的摘要，保留所有关键信息。
-
-要求：
-- 每条摘要不超过50字
-- 保留人物、事件、偏好等关键信息
-- 用分号分隔不同要点
-
-待压缩的记忆：
-`;
-
-export async function compressOldMemories(
-  config: { endpoint: string; apiKey: string; model: string }
-): Promise<void> {
-  const memories = loadMemories();
-  if (memories.length <= MAX_MEMORIES) return;
-
-  const now = Date.now();
-  const ageThreshold = now - COMPRESS_AGE_DAYS * 24 * 60 * 60 * 1000;
-
-  const oldMemories = memories
-    .filter((m) => m.timestamp < ageThreshold && m.type !== "summary")
-    .sort((a, b) => a.timestamp - b.timestamp);
-
-  if (oldMemories.length < 5) return;
-
-  const toCompress = oldMemories.slice(0, oldMemories.length - 20);
-
-  if (!config.apiKey) return;
-
-  try {
-    const prompt = COMPRESS_PROMPT + toCompress.map((m) => `- ${m.content}`).join("\n");
-    const res = await fetch(`${config.endpoint}/chat/completions`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${config.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: config.model,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 256,
-      }),
-    });
-    const data = await res.json();
-    if (data.error) return;
-
-    const summary = data.choices[0].message.content.trim();
-    const idsToRemove = new Set(toCompress.map((m) => m.id));
-
-    const compressed: MemoryEntry = {
-      id: Date.now().toString(),
-      content: summary,
-      timestamp: now,
-      type: "summary",
-    };
-
-    const updated = [
-      ...memories.filter((m) => !idsToRemove.has(m.id)),
-      compressed,
-    ];
-
-    saveMemories(updated);
-  } catch {
-    // 压缩失败不影响正常使用
   }
 }

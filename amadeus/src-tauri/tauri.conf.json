@@ -1,12 +1,12 @@
 {
   "$schema": "../../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Amadeus",
-  "version": "2.3.0",
+  "version": "3.0.0",
   "identifier": "com.amadeus.kurisu",
   "build": {
     "devUrl": "http://localhost:3000",
     "beforeDevCommand": "npx next start",
-    "beforeBuildCommand": "npm run build && node scripts/build-for-tauri.mjs"
+    "beforeBuildCommand": "node scripts/build-for-tauri.mjs"
   },
   "app": {
     "windows": [],
@@ -26,6 +26,11 @@
     ],
     "resources": [
       "../.next/standalone/**/*"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installerHooks": "./installer-hooks.nsh"
+      }
+    }
   }
 }

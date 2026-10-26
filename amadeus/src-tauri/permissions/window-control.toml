@@ -1,0 +1,19 @@
+# 自绘标题栏所需的窗口控制命令（2026-10-25）
+#
+# 背景：Tauri 2 从某个版本起，**应用自身的命令也要走 ACL**。
+# 没有这个文件时，前端 invoke('quit_app') 会被直接拒绝，报
+#   "Command quit_app not allowed by ACL"
+# 表现就是：点退出弹"退出失败"、点最小化没反应、拖窗口没反应。
+# （踩过一次：以为命令没注册，实际是权限没声明。）
+#
+# 用法：在 capabilities/default.json 的 permissions 里写 "allow-window-control"。
+
+[[permission]]
+identifier = "allow-window-control"
+description = "自绘无边框标题栏用到的窗口控制：拖动窗口、最小化到任务栏、隐藏到托盘、退出应用"
+commands.allow = [
+    "start_drag",
+    "minimize_window",
+    "hide_window",
+    "quit_app",
+]

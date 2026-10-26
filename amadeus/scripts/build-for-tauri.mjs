@@ -21,7 +21,7 @@
  *
  * 运行时 Rust 代码执行：node.exe start.js → 启动 Next.js server → localhost:3456
  */
-import { cpSync, existsSync, mkdirSync, writeFileSync, readFileSync, statSync } from "fs";
+import { cpSync, existsSync, rmSync, writeFileSync, statSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import { execSync } from "child_process";
@@ -50,6 +50,78 @@ const staticDst = join(standaloneApp, ".next", "static");
 if (existsSync(staticSrc)) {
   console.log("[build-for-tauri] 复制 .next/static...");
   cpSync(staticSrc, staticDst, { recursive: true });
+}
+
+// 2.5 ★ 硬清理：把误扫进 standalone 的大目录删掉
+//
+// 背景（2026-10-12 踩过两次坑，第二次直接把 E 盘 77G 撑爆）：
+//   Next 的文件追踪会把项目外的同级目录当成项目资源塞进 standalone：
+//     1. tts-local   —— 语音引擎，19GB（实测进产物 11GB）
+//     2. src-tauri  —— Rust 编译产物 target/，9.6GB
+//   原因：E:\Amadeus 下有 package.json（只有 tauri cli），
+//   Next 把 workspace root 认成了 E:\Amadeus 而不是 E:\Amadeus\amadeus，
+//   所以 next.config.ts 里的 outputFileTracingExcludes（相对路径）完全无效，
+//   而绝对路径和带 ".." 的 glob 又会被 Turbopack 直接拒绝。
+//
+// 这里做硬删除兜底：不管配置生不生效，产物里不允许出现这两个目录。
+//
+// ⚠️ 用 Windows 原生 rd /s /q 而不是 rmSync —— rmSync 会被某些环境的
+// safe-delete shim 拦截（大目录删除直接 ETIMEDOUT）。用户机器上 git-bash 可用。
+function forceRemoveDir(dir) {
+  if (!existsSync(dir)) return false;
+  try {
+    execSync(`rd /s /q "${dir}"`, {
+      stdio: "ignore",
+      timeout: 180000,
+      windowsHide: true,
+    });
+    return !existsSync(dir);
+  } catch {
+    // rd 失败再退回 rmSync（比如在非 Windows 环境）
+    try {
+      rmSync(dir, { recursive: true, force: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+const junkDirs = [
+  join(standaloneRoot, "tts-local"),
+  join(standaloneApp, "tts-local"),
+  join(standaloneApp, "src-tauri"),
+  join(standaloneApp, ".next", "cache"),
+];
+for (const d of junkDirs) {
+  if (existsSync(d)) {
+    console.log(`[build-for-tauri] 清理误打包的大目录: ${d}`);
+    if (forceRemoveDir(d)) {
+      console.log(`[build-for-tauri]   ✓ 已删除`);
+    } else {
+      console.warn(
+        `[build-for-tauri]   ✗ 删除失败！产物体积会异常，复制到部署目录前请先检查磁盘空间`
+      );
+    }
+  }
+}
+
+// 统计产物体积（早点发现异常，别等复制到部署目录时把磁盘撑爆）
+try {
+  const sizeOut = execSync(
+    `powershell -NoProfile -Command "(Get-ChildItem '${standaloneRoot}' -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum"`,
+    { encoding: "utf-8", timeout: 120000, windowsHide: true }
+  ).trim();
+  const mb = Math.round(Number(sizeOut) / 1024 / 1024);
+  console.log(`[build-for-tauri] 产物体积: ${mb} MB`);
+  if (mb > 500) {
+    console.warn(
+      `[build-for-tauri] ⚠️ 产物体积异常（${mb} MB），可能又扫进了不该进的大目录。` +
+      `复制到部署目录前务必先检查磁盘空间！`
+    );
+  }
+} catch {
+  /* 体积统计失败不影响构建 */
 }
 
 // 3. 复制 public/* → standalone/amadeus/public（standalone 只复制了部分）

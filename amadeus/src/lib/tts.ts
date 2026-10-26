@@ -1,445 +1,283 @@
 import { getSessionCharacterId } from "./auth";
-import { getCharacterById, DEFAULT_CHARACTER } from "./characters";
+import { loadVoiceClipsEnabled, matchVoiceClip, voiceClipUrl } from "./voice-clips";
+import { matchCatchphrase, pickCatchphraseUrl } from "./catchphrase";
+import type { EmotionType } from "./emotion";
+import { log } from "@/lib/debug-log";
+import {
+  CLOUD_MODEL,
+  clearCloudVoice,
+  loadAliyunKey,
+  loadCloudVoices,
+  saveCloudVoice,
+} from "./cloud-tts";
 
 const TTS_STORAGE_KEY = "amadeus_tts_config";
-const TTS_PROVIDER_STORAGE_KEY = "amadeus_tts_provider";
-const ALIYUN_KEY_STORAGE_KEY = "amadeus_aliyun_api_key";
-const MINIMAX_KEY_STORAGE_KEY = "amadeus_minimax_api_key";
-const ALIYUN_VOICE_ID_STORAGE_KEY = "amadeus_aliyun_voice_id";
-const MINIMAX_VOICE_ID_STORAGE_KEY = "amadeus_minimax_voice_id";
-const TTS_ENGINE_STORAGE_KEY = "amadeus_tts_engine";
-const TTS_ENGINE_MIGRATION_KEY = "amadeus_tts_engine_migrated_v2";
-const CUSTOM_TTS_STORAGE_KEY = "amadeus_custom_tts";
-const VOICE_SAMPLE_VERSION_KEY = "amadeus_voice_sample_version";
-const VOICE_SAMPLE_VERSION = "v3";
-// 克隆状态：记录是否已一键克隆，避免重复克隆（阿里云账号音色数量有限）
-// 按角色 ID 隔离：不同角色用不同音色，克隆状态分开存
-const VOICE_CLONED_KEY_PREFIX = "amadeus_voice_cloned_";
-const CLONED_VOICE_KEY_PREFIX = "amadeus_cloned_voice_";
 
-function getVoiceClonedKey(): string {
-  if (typeof window === "undefined") return VOICE_CLONED_KEY_PREFIX + DEFAULT_CHARACTER.id;
-  return VOICE_CLONED_KEY_PREFIX + getSessionCharacterId();
-}
-function getClonedVoiceKey(): string {
-  if (typeof window === "undefined") return CLONED_VOICE_KEY_PREFIX + DEFAULT_CHARACTER.id;
-  return CLONED_VOICE_KEY_PREFIX + getSessionCharacterId();
-}
-
-// 默认引擎改为 flash（v3.5-flash）：合成速度比 plus 快约 50%+，音质差异日常对话几乎无感
-// plus 是高质量慢速版，凌晨高峰期 TTS 延迟会被显著放大
-const DEFAULT_TTS_ENGINE: AliyunEngine = "cosyvoice-v3.5-flash";
-
-// === 提供商类型 ===
-export type TTSProvider = "aliyun" | "minimax" | "custom";
-
-// === 阿里云引擎 ===
-export type AliyunEngine =
-  | "cosyvoice-v3.5-plus"
-  | "cosyvoice-v3.5-flash"
-  | "cosyvoice-v3-flash"
-  | "cosyvoice-v3-plus"
-  | "qwen3-tts-vc";
-
-// === MiniMax 引擎 ===
-export type MiniMaxEngine =
-  | "speech-2.8-hd"
-  | "speech-2.8-turbo"
-  | "speech-02-hd"
-  | "speech-02-turbo";
-
-export type TTSEngine = AliyunEngine | MiniMaxEngine;
-
-// === 自定义 TTS 配置 ===
-export interface CustomTTSConfig {
-  endpoint: string;
-  model: string;
-  apiKey: string;
-}
+// 2026-10-25：本地语音模型（tts-local / Qwen3-TTS，9880）整个功能已删除，
+// 语音合成只走云端（阿里云百炼 CosyVoice，粉丝自带 Key）。
+// 历史遗留的 localStorage key（amadeus_tts_local_endpoint 等）不再读写，留着无害。
 
 export interface TTSConfig {
   enabled: boolean;
-  voiceSample: string | null;
   autoPlay: boolean;
 }
 
 // === 存储函数 ===
 
 export function loadTTSConfig(): TTSConfig {
-  if (typeof window === "undefined") {
-    return { enabled: false, voiceSample: null, autoPlay: true };
-  }
+  if (typeof window === "undefined") return { enabled: false, autoPlay: true };
   const saved = localStorage.getItem(TTS_STORAGE_KEY);
-  const parsed = saved ? JSON.parse(saved) : { enabled: false, voiceSample: null };
-  return { ...parsed, autoPlay: true };
+  const parsed = saved ? JSON.parse(saved) : { enabled: false };
+  return { enabled: !!parsed.enabled, autoPlay: true };
 }
 
 export function saveTTSConfig(config: TTSConfig) {
   localStorage.setItem(TTS_STORAGE_KEY, JSON.stringify(config));
 }
 
-export function loadTTSProvider(): TTSProvider {
-  if (typeof window === "undefined") return "aliyun";
-  return (localStorage.getItem(TTS_PROVIDER_STORAGE_KEY) as TTSProvider) || "aliyun";
-}
-
-export function saveTTSProvider(provider: TTSProvider) {
-  localStorage.setItem(TTS_PROVIDER_STORAGE_KEY, provider);
-}
-
-export function loadAliyunAPIKey(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem(ALIYUN_KEY_STORAGE_KEY) || "";
-}
-
-export function saveAliyunAPIKey(key: string) {
-  localStorage.setItem(ALIYUN_KEY_STORAGE_KEY, key);
-}
-
-export function loadMiniMaxAPIKey(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem(MINIMAX_KEY_STORAGE_KEY) || "";
-}
-
-export function saveMiniMaxAPIKey(key: string) {
-  localStorage.setItem(MINIMAX_KEY_STORAGE_KEY, key);
-}
-
-// === 音色 ID（用户自行克隆的音色 ID，留空则服务端用默认） ===
-export function loadAliyunVoiceId(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem(ALIYUN_VOICE_ID_STORAGE_KEY) || "";
-}
-
-export function saveAliyunVoiceId(id: string) {
-  localStorage.setItem(ALIYUN_VOICE_ID_STORAGE_KEY, id);
-}
-
-export function loadMiniMaxVoiceId(): string {
-  if (typeof window === "undefined") return "";
-  return localStorage.getItem(MINIMAX_VOICE_ID_STORAGE_KEY) || "";
-}
-
-export function saveMiniMaxVoiceId(id: string) {
-  localStorage.setItem(MINIMAX_VOICE_ID_STORAGE_KEY, id);
-}
-
-export function loadTTSEngine(): TTSEngine {
-  if (typeof window === "undefined") return DEFAULT_TTS_ENGINE;
-  // 一次性迁移：把旧的 plus 默认值升级到 flash（用户后来手动改的不动）
-  // 用 migrated 标记保证幂等，只在首次访问时执行一次
-  const migrated = localStorage.getItem(TTS_ENGINE_MIGRATION_KEY);
-  const saved = localStorage.getItem(TTS_ENGINE_STORAGE_KEY) as TTSEngine | null;
-  if (!migrated) {
-    // 未设过、或仍是 plus（旧默认值）→ 切到 flash
-    if (!saved || saved === "cosyvoice-v3.5-plus") {
-      localStorage.setItem(TTS_ENGINE_STORAGE_KEY, DEFAULT_TTS_ENGINE);
-      localStorage.setItem(TTS_ENGINE_MIGRATION_KEY, "1");
-      return DEFAULT_TTS_ENGINE;
-    }
-    // 用户已手动选了其他引擎（flash/v3-flash/qwen3-tts-vc 等），保留用户选择
-    localStorage.setItem(TTS_ENGINE_MIGRATION_KEY, "1");
-    return saved;
-  }
-  return saved || DEFAULT_TTS_ENGINE;
-}
-
-export function saveTTSEngine(engine: TTSEngine) {
-  localStorage.setItem(TTS_ENGINE_STORAGE_KEY, engine);
-}
-
-export function loadCustomTTS(): CustomTTSConfig {
-  if (typeof window === "undefined") return { endpoint: "", model: "", apiKey: "" };
-  const saved = localStorage.getItem(CUSTOM_TTS_STORAGE_KEY);
-  return saved ? JSON.parse(saved) : { endpoint: "", model: "", apiKey: "" };
-}
-
-export function saveCustomTTS(config: CustomTTSConfig) {
-  localStorage.setItem(CUSTOM_TTS_STORAGE_KEY, JSON.stringify(config));
-}
-
-// === 一键克隆状态 ===
-
-/** 是否已经一键克隆过红莉栖音色（避免重复克隆） */
-export function isVoiceCloned(): boolean {
-  if (typeof window === "undefined") return false;
-  const key = getVoiceClonedKey();
-  if (localStorage.getItem(key) === "1") return true;
-  // 迁移：红莉栖角色，旧版用 amadeus_voice_cloned（无后缀）
-  if (key === VOICE_CLONED_KEY_PREFIX + DEFAULT_CHARACTER.id) {
-    const legacy = localStorage.getItem("amadeus_voice_cloned");
-    if (legacy === "1") {
-      localStorage.setItem(key, "1");
-      const legacyVoice = localStorage.getItem("amadeus_cloned_voice");
-      if (legacyVoice) localStorage.setItem(getClonedVoiceKey(), legacyVoice);
-      return true;
-    }
-  }
-  return false;
-}
-
-/** 标记已克隆 + 存克隆得到的音色名 */
-export function setVoiceCloned(voice: string) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(getVoiceClonedKey(), "1");
-  localStorage.setItem(getClonedVoiceKey(), voice);
-}
-
-/** 清除克隆标记（让用户可以重新克隆） */
-export function clearVoiceCloned() {
-  if (typeof window === "undefined") return;
-  localStorage.removeItem(getVoiceClonedKey());
-  localStorage.removeItem(getClonedVoiceKey());
-}
-
-/** 读取克隆得到的音色名（用于 qwen3-tts-vc 合成） */
-export function loadClonedVoice(): string {
-  if (typeof window === "undefined") return "";
-  const key = getClonedVoiceKey();
-  const saved = localStorage.getItem(key);
-  if (saved) return saved;
-  // 迁移：红莉栖角色从旧版 key 复制
-  if (key === CLONED_VOICE_KEY_PREFIX + DEFAULT_CHARACTER.id) {
-    const legacy = localStorage.getItem("amadeus_cloned_voice");
-    if (legacy) {
-      localStorage.setItem(key, legacy);
-      return legacy;
-    }
-  }
-  return "";
-}
-
-/**
- * 调后端一键克隆红莉栖音色。
- * 成功返回 { voice }，失败抛 Error（message 是中文提示）。
- */
-export async function cloneKurisuVoice(apiKey: string): Promise<{ voice: string; fallbackMode: boolean; sampleFile?: string; characterId?: string }> {
-  // 传当前角色 ID，后端按角色取对应的音色样本
-  const characterId = getSessionCharacterId();
-  const res = await fetch("/api/tts/clone", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ apiKey, characterId }),
-  });
-  const data = await res.json();
-  if (!res.ok || data.error) {
-    throw new Error(data.error || `克隆失败（HTTP ${res.status}）`);
-  }
-  return { voice: data.voice, fallbackMode: !!data.fallbackMode, sampleFile: data.sampleFile, characterId: data.characterId };
-}
-
-// === 音色样本（兼容旧逻辑） ===
-
-export async function loadDefaultVoiceSample(): Promise<string | null> {
-  try {
-    // 按当前角色取音色样本路径
-    const character = getCharacterById(getSessionCharacterId());
-    const res = await fetch(character.voiceSample);
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    return await new Promise<string>((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-  } catch {
-    return null;
-  }
-}
-
-export async function ensureVoiceSample(config: TTSConfig): Promise<TTSConfig> {
-  const savedVersion = typeof window !== "undefined"
-    ? localStorage.getItem(VOICE_SAMPLE_VERSION_KEY)
-    : null;
-  const needsRefresh = savedVersion !== VOICE_SAMPLE_VERSION;
-  if (config.voiceSample && !needsRefresh) return config;
-  const defaultSample = await loadDefaultVoiceSample();
-  if (!defaultSample) return config;
-  const updated = { ...config, voiceSample: defaultSample };
-  saveTTSConfig(updated);
-  if (typeof window !== "undefined") {
-    localStorage.setItem(VOICE_SAMPLE_VERSION_KEY, VOICE_SAMPLE_VERSION);
-  }
-  return updated;
-}
-
 // === 合成 ===
 
 /**
  * 可播放的音频。
- * - url：直接 URL（优先，浏览器流式边下边播，省 base64 编解码）
- * - base64：base64 数据（降级，多分片合并或自定义 provider 时用）
+ * - url：音频文件地址（原声片段）
+ * - base64：base64 数据（本地服务返回 wav）
+ * - segments：流式模式下的分段音频（每段独立可播，用于无缝排队播放）
  */
 export interface PlayableAudio {
   url?: string;
   base64?: string;
   format?: string;
+  /** 流式分段：按顺序播放，实现"第一句先开口" */
+  segments?: string[];
 }
 
-// === 当前正在播放的音频元素（供挂断/打断时立即停止） ===
+/** 播放队列里的单个音源 */
+interface AudioSource {
+  url?: string;
+  base64?: string;
+  format?: string;
+}
+
+// === 当前正在播放的音频元素（供挂断/打断时立即停止）===
 let activeAudioEl: HTMLAudioElement | null = null;
+
+/**
+ * 播放会话序号。
+ *
+ * ⚠️ 2026-10-18 修：口型「只有第一句动」的根因就是 tts-start/tts-end 无归属。
+ * 上一句结束时会派发 tts-end，如果它晚于下一句的 tts-start 到达（实测只差 1ms），
+ * Live2D 会立刻把 isSpeaking 置 false —— 整句都不张嘴。
+ * 现在每个 start/end 都带 token，Live2D 只认自己那次会话的 end。
+ */
+let ttsSessionToken = 0;
+
+/**
+ * 当前分段播放链的控制句柄（流式播放时非空）。
+ * 用 var 提前声明：stopCurrentAudio() 写在这个变量声明之前，
+ * 如果用 let 会在模块初始化阶段触发 TDZ。
+ */
+var activeSegmentChain: { stopped: boolean; audio: HTMLAudioElement | null } | null = null;
 
 /** 立即停止当前正在播放的 TTS 音频，并复位 Live2D 口型。供通话挂断等场景调用。 */
 export function stopCurrentAudio() {
+  // 分段流式播放：先置停止标记，让 playNext 链条不再往下走
+  if (activeSegmentChain) {
+    activeSegmentChain.stopped = true;
+    const segAudio = activeSegmentChain.audio;
+    activeSegmentChain = null;
+    if (segAudio) {
+      try { segAudio.pause(); } catch { /* 忽略 */ }
+      try { segAudio.src = ""; } catch { /* 忽略 */ }
+    }
+  }
   if (activeAudioEl) {
     try { activeAudioEl.pause(); } catch { /* 忽略 */ }
     try { activeAudioEl.src = ""; } catch { /* 忽略 */ }
     activeAudioEl = null;
-    window.dispatchEvent(new CustomEvent("amadeus-tts-end"));
+    window.dispatchEvent(new CustomEvent("amadeus-tts-end", { detail: { token: ttsSessionToken } }));
   }
 }
 
-function stripParentheses(text: string): string {
+export function stripParentheses(text: string): string {
   return text.replace(/[（(][^）)]*[）)]/g, "").replace(/\s+/g, " ").trim();
 }
 
 /**
- * 清理 TTS 文本，修复 CosyVoice 末尾拖音问题。
- * 问题根因：
- * 1. 末尾省略号 `...` 或 `。。。` 会被引擎读成 "yi" 等奇怪音
- * 2. 末尾日语助词（わ/よ/ね）被拖长成 "wa~"、"yo~"（二三声调）
- * 3. 多余换行符被当内容朗读
- * 4. 末尾无标点时引擎不知道句子结束，会自动补拖音
+ * 清理 TTS 文本，避免引擎读错。
+ * 1. 省略号 `...` / `…` 会被读成奇怪的音 → 换成句号
+ * 2. 波浪号会被读成颤音 → 去掉
+ * 3. 多余换行/空格会被当内容朗读 → 合并
+ * 4. 末尾无标点时引擎会补拖音 → 补句号
  */
-function cleanTTS_text(text: string): string {
+export function cleanTTSText(text: string): string {
   let t = text;
-  // 1. 去掉省略号（中英文、连续句点）
   t = t.replace(/\.{3,}/g, "。");
   t = t.replace(/…/g, "。");
   t = t.replace(/。{2,}/g, "。");
-  // 2. 去掉波浪号（会被读成颤音）
   t = t.replace(/~/g, "");
   t = t.replace(/〜/g, "");
-  // 3. 合并多余换行/空格
   t = t.replace(/\s+/g, " ").trim();
-  // 4. 末尾确保有句号（让引擎明确句子结束，避免自动补拖音）
-  //    但已有标点（。！？!?）就不加
   if (t && !/[。！？!?\.]$/.test(t)) {
     t = t + "。";
   }
   return t;
 }
 
-export async function synthesizeSpeech(
-  text: string,
-  ttsConfig: TTSConfig
-): Promise<PlayableAudio | null> {
-  console.log("[TTS] synthesizeSpeech 调用:", { enabled: ttsConfig.enabled, textLen: text.length, textPreview: text.slice(0, 40) });
+// ================= 云端语音（阿里云 CosyVoice，2026-10-19） =================
+// 粉丝自带 Key：首次复刻三个音色（免费），之后每次合成按字符计费。
+// 云端不流式（官方 HTTP 接口是整段返回 OSS 链接），所以这里整段取回 base64 mp3。
 
-  if (!ttsConfig.enabled) {
-    console.warn("[TTS] 跳过：ttsConfig.enabled = false（请到设置→语音合成里打开开关）");
-    return null;
-  }
-
-  const cleanText = cleanTTS_text(stripParentheses(text));
-  if (!cleanText) {
-    console.warn("[TTS] 跳过：清洗后文本为空");
-    return null;
-  }
-  console.log("[TTS] 清洗后文本:", cleanText.slice(0, 80), "（长度:", cleanText.length, "）");
-
-  const provider = loadTTSProvider();
-  const engine = loadTTSEngine();
-  console.log("[TTS] 当前配置:", { provider, engine });
-
-  // 根据提供商获取对应的 API Key 和音色 ID
-  let apiKey: string;
-  let voiceId: string;
-  if (provider === "aliyun") {
-    apiKey = loadAliyunAPIKey();
-    voiceId = loadAliyunVoiceId();
-    // 没手填 voiceId 时，用一键克隆得到的音色名（所有引擎统一）
-    if (!voiceId) {
-      voiceId = loadClonedVoice();
-      if (voiceId) console.log("[TTS] 使用克隆音色:", voiceId);
-    }
-    // 自动克隆：当前角色从未克隆过 → 首次 TTS 时自动触发一键克隆
-    // 克隆状态按角色 ID 隔离（amadeus_voice_cloned_<id>），红莉栖已克隆不会重复
-    // maho/may 等新角色首次发消息会自动克隆，之后不再触发
-    if (!voiceId && !isVoiceCloned()) {
-      console.log("[TTS] 当前角色未克隆音色，自动触发一键克隆...");
-      try {
-        const cloneResult = await cloneKurisuVoice(apiKey);
-        voiceId = cloneResult.voice;
-        setVoiceCloned(voiceId);
-        console.log("[TTS] 自动克隆成功，音色:", voiceId, "角色:", cloneResult.characterId);
-      } catch (e) {
-        console.error("[TTS] 自动克隆失败:", e instanceof Error ? e.message : e, "（请到设置→语音合成手动克隆，或检查阿里云 API Key）");
-        return null;
-      }
-    }
-  } else if (provider === "minimax") {
-    apiKey = loadMiniMaxAPIKey();
-    voiceId = loadMiniMaxVoiceId();
-  } else {
-    apiKey = loadCustomTTS().apiKey;
-    voiceId = "";
-  }
-  // 关键：trim 掉复制时可能带入的空格/换行符（401 的常见元凶）
-  apiKey = (apiKey || "").trim();
-  if (!apiKey) {
-    console.error(`[TTS] 失败：未配置 ${provider} API Key（请到设置→语音合成里填写）`);
-    return null;
-  }
-  console.log(`[TTS] API Key 掩码：***${apiKey.slice(-4)}（共 ${apiKey.length} 字符，前3位: ${apiKey.slice(0, 3)}）`);
-
+/** 确保该角色有云端音色；缓存里没有就现场复刻一次 */
+async function ensureCloudVoice(characterId: string, apiKey: string): Promise<string | null> {
+  const cached = loadCloudVoices()[characterId];
+  if (cached) return cached;
   try {
-    const t0 = Date.now();
-    console.log("[TTS] 请求 /api/tts:", { provider, engine, textLen: cleanText.length });
-    const res = await fetch("/api/tts", {
+    const res = await fetch("/api/tts/cloud/clone", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: cleanText,
-        apiKey,
-        engine,
-        provider,
-        voiceId,
-        ...(provider === "custom" ? { custom: loadCustomTTS() } : {}),
-      }),
+      body: JSON.stringify({ characterId, apiKey }),
     });
-
-    const data = await res.json();
-    console.log(`[TTS] 响应耗时: ${Date.now() - t0}ms`);
-    if (data.error) {
-      console.error("[TTS] 服务端错误:", data.error);
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.voiceId) {
+      console.error("[云端语音] 音色复刻失败:", data.error || `HTTP ${res.status}`);
       return null;
     }
-    // 优先 URL（服务端透传 OSS URL，前端流式播放）
-    if (data.url) {
-      console.log("[TTS] 合成成功，返回 URL:", data.url.slice(0, 80), "...");
-      return { url: data.url, format: data.format || "mp3" };
-    }
-    if (!data.audio) {
-      console.error("[TTS] 返回数据中无 audio/url 字段:", data);
-      return null;
-    }
-    console.log("[TTS] 合成成功，audio base64 长度:", data.audio.length);
-    return { base64: data.audio, format: data.format || "mp3" };
-  } catch (error) {
-    console.error("[TTS] 请求异常:", error);
+    saveCloudVoice(characterId, String(data.voiceId));
+    console.log(`[云端语音] 音色已复刻 ${characterId} → ${data.voiceId}`);
+    return String(data.voiceId);
+  } catch (e) {
+    console.error("[云端语音] 音色复刻异常:", e);
     return null;
   }
 }
 
-export function playAudio(audioData: PlayableAudio): Promise<void> {
-  return new Promise((resolve, reject) => {
-    // 优先 URL（流式播放，边下边播，省 base64 编解码）
-    // 降级 base64
-    const audioEl: HTMLAudioElement = (() => {
-      if (audioData.url) {
-        console.log("[TTS] playAudio 用 URL 直接播放:", audioData.url.slice(0, 80));
-        const el = new Audio(audioData.url);
-        // 设 crossOrigin：OSS 若开了 CORS，analyser 能读到振幅做嘴唇同步；
-        // 若没开，analyser 读到 0（静音数据），但音频不受影响。
-        el.crossOrigin = "anonymous";
-        return el;
+/** 云端整段合成；音色失效时自动重新复刻重试一次 */
+async function synthesizeCloud(text: string, characterId: string): Promise<PlayableAudio | null> {
+  const apiKey = loadAliyunKey().trim();
+  if (!apiKey) {
+    console.warn("[云端语音] 未配置阿里云 API Key（设置 → 语音合成）");
+    return null;
+  }
+  let voiceId = await ensureCloudVoice(characterId, apiKey);
+  if (!voiceId) return null;
+
+  const call = async (voice: string) => {
+    const res = await fetch("/api/tts/cloud", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, voiceId: voice, apiKey }),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { ok: res.ok, data };
+  };
+
+  let r = await call(voiceId);
+  if (!r.ok && /voice|音色|INVALID|NotFound|NO_VOICE/i.test(String(r.data?.code || "") + String(r.data?.error || ""))) {
+    console.warn("[云端语音] 音色疑似失效，重新复刻后重试:", r.data?.error);
+    clearCloudVoice(characterId);
+    const again = await ensureCloudVoice(characterId, apiKey);
+    if (again) r = await call(again);
+  }
+  if (!r.ok || !r.data?.audio) {
+    console.error("[云端语音] 合成失败:", r.data?.error || "未知错误");
+    return null;
+  }
+  log(`[云端语音] 合成成功（${CLOUD_MODEL}，${r.data.characters || "?"} 字符）`);
+  return { base64: r.data.audio as string, format: "mp3" };
+}
+
+/**
+ * 合成语音（流式接口，云端引擎整段返回后作为"单段"回调）。
+ *
+ * 历史说明：本地引擎时代这里走 /api/tts 的 SSE 流式接口，第一段到达就回调
+ * onFirstSegment 实现"边想边说"。2026-10-25 本地模型功能删除，云端 CosyVoice
+ * 是整段返回，没有"首段提前"可做 —— onFirstSegment 参数保留但不再触发，
+ * 调用方无需改动。
+ *
+ * @param onFirstSegment 保留参数（云端整段返回，不再触发）
+ */
+export async function synthesizeSpeechStream(
+  text: string,
+  ttsConfig: TTSConfig,
+  emotion?: EmotionType,
+  onFirstSegment?: (segmentBase64: string) => void
+): Promise<PlayableAudio | null> {
+  void onFirstSegment;
+  return synthesizeSpeech(text, ttsConfig, emotion);
+}
+
+/**
+ * 合成语音（非流式，整句返回）。
+ *
+ * 2026-10-25 本地模型功能删除：只走云端 CosyVoice 整段合成。
+ *
+ * @param emotion LLM 回复里带的情绪标签（neutral/blush/smile/angry/sad）。
+ *                本地引擎时代它映射成 8 维情感向量；云端 CosyVoice 不吃这个
+ *                参数，保留签名是为了调用方不动。
+ *
+ * 经典台词优先：命中经典台词库时直接播原声（还原度更高，且零延迟）。
+ * 只有"整句就是那句经典台词"时才用原声 —— 否则长回复会被截断成一句台词。
+ */
+export async function synthesizeSpeech(
+  text: string,
+  ttsConfig: TTSConfig,
+  emotion?: EmotionType
+): Promise<PlayableAudio | null> {
+  void emotion;
+  log("[TTS] synthesizeSpeech 调用:", { enabled: ttsConfig.enabled, textLen: text.length });
+
+  if (!ttsConfig.enabled) {
+    console.warn("[TTS] 跳过：语音合成开关未打开（设置 → 语音合成）");
+    return null;
+  }
+
+  const cleanText = cleanTTSText(stripParentheses(text));
+  if (!cleanText) {
+    console.warn("[TTS] 跳过：清洗后文本为空");
+    return null;
+  }
+
+  const characterId = getSessionCharacterId();
+
+  // === 口癖原声：整句就是那条原声时直接播（开场白 / 回答"口头禅是什么"）===
+  // 注意：只做整句替换，不做"原声+合成"拼接 —— 拼接怎么调都不自然（2026-10-18 定案）
+  const clip = matchCatchphrase(characterId, cleanText);
+  if (clip) {
+    log(`[TTS] 命中口癖原声: ${clip.id} (${clip.note})`);
+    return { url: pickCatchphraseUrl(clip), format: "wav" };
+  }
+
+  // === 经典台词原声：仅当整句就是那条经典台词时才用，避免长回复被截断 ===
+  if (characterId === "kurisu" && loadVoiceClipsEnabled()) {
+    const voiceClip = matchVoiceClip(cleanText);
+    if (voiceClip) {
+      // 长度差太大说明回复是长句只是碰巧含关键词，交给合成
+      const ratio = voiceClip.original.length / cleanText.length;
+      if (ratio >= 0.7) {
+        log(`[TTS] 命中经典台词原声: ${voiceClip.id} (${voiceClip.scene})`);
+        return { url: voiceClipUrl(voiceClip.id), format: "wav" };
       }
+    }
+  }
+
+  // === 云端合成（阿里云百炼 CosyVoice，粉丝自带 Key）===
+  return synthesizeCloud(cleanText, characterId);
+}
+
+export function playAudio(audioData: PlayableAudio): Promise<void> {
+  // === 分段流式：逐段无缝排队播放（2026-10-12 新增）===
+  if (audioData.segments && audioData.segments.length > 0) {
+    return playQueue(audioData.segments.map((b64) => ({ base64: b64, format: "wav" })));
+  }
+
+  return new Promise((resolve, reject) => {
+    const audioEl: HTMLAudioElement = (() => {
       if (audioData.base64) {
-        console.log("[TTS] playAudio 用 base64 播放，长度:", audioData.base64.length);
-        const fmt = audioData.format || "mp3";
+        const fmt = audioData.format || "wav";
         return new Audio(`data:audio/${fmt};base64,${audioData.base64}`);
+      }
+      if (audioData.url) {
+        return new Audio(audioData.url);
       }
       throw new Error("无可用音频数据");
     })();
@@ -447,12 +285,9 @@ export function playAudio(audioData: PlayableAudio): Promise<void> {
     const audio = audioEl;
 
     // === 用 Web Audio API 接管播放，实现真实音频振幅分析 ===
-    // CORS taint 不会抛异常，只是 analyser 返回 0 数据；音频播放正常。
-    // createMediaElementSource 真正抛异常的情况（极少）才降级为纯 audio 元素播放。
     let audioCtx: AudioContext | null = null;
     let analyser: AnalyserNode | null = null;
 
-    // 记录当前播放元素，供 stopCurrentAudio 打断
     activeAudioEl = audio;
 
     try {
@@ -463,21 +298,20 @@ export function playAudio(audioData: PlayableAudio): Promise<void> {
       const source = audioCtx.createMediaElementSource(audio);
       source.connect(analyser);
       analyser.connect(audioCtx.destination);
-      console.log("[TTS] Web Audio API 接管播放，analyser 已就绪");
     } catch (err) {
       console.warn("[TTS] Web Audio API 初始化失败，降级普通播放:", err);
       analyser = null;
       if (audioCtx) { try { audioCtx.close(); } catch { /* 忽略 */ } audioCtx = null; }
     }
 
-    // 统一清理函数：释放音频元素 + 关闭 AudioContext
-    // 关键：createMediaElementSource 会让 audioCtx 强引用 audio，
-    // 不 close audioCtx 则 audio 永远不会被 GC → 长时间使用内存确实会涨。
-    // audio.src="" + load() 让浏览器丢弃已下载/解码的媒体数据。
     let cleaned = false;
     const cleanup = () => {
       if (cleaned) return;
       cleaned = true;
+      // ⚠️ 必须先摘掉 handler 再清 src：给 src 赋值 "" 会异步触发 error 事件，
+      // 而 onerror 里又会派发一次 tts-end —— 那个"迟到的 end"会把下一句的口型掐死。
+      audio.onended = null;
+      audio.onerror = null;
       if (activeAudioEl === audio) activeAudioEl = null;
       try { audio.pause(); } catch { /* 忽略 */ }
       try { audio.src = ""; } catch { /* 忽略 */ }
@@ -488,39 +322,148 @@ export function playAudio(audioData: PlayableAudio): Promise<void> {
       }
     };
 
-    // 派发事件通知 Live2D 开始说话，附带 analyser 供嘴唇同步使用
-    window.dispatchEvent(new CustomEvent("amadeus-tts-start", { detail: { analyser } }));
+    // 本次播放会话号：start/end 都带它，Live2D 只认自己那次的 end
+    const token = ++ttsSessionToken;
 
-    // 元数据加载后打印时长，诊断"读几个字就停"
-    audio.onloadedmetadata = () => {
-      console.log(`[TTS] 音频元数据: duration=${audio.duration}s, readyState=${audio.readyState}`);
-    };
+    // 派发事件通知 Live2D 开始说话，附带 analyser 供嘴唇同步使用
+    window.dispatchEvent(new CustomEvent("amadeus-tts-start", { detail: { analyser, token } }));
 
     audio.onended = () => {
-      console.log(`[TTS] 播放结束, 实际播放到=${audio.currentTime}s / 总长=${audio.duration}s`);
-      window.dispatchEvent(new CustomEvent("amadeus-tts-end"));
+      window.dispatchEvent(new CustomEvent("amadeus-tts-end", { detail: { token } }));
       cleanup();
       resolve();
     };
     audio.onerror = (e) => {
-      console.error("[TTS] 播放错误:", e, "errorCode:", audio.error?.code, "errorMsg:", audio.error?.message);
-      window.dispatchEvent(new CustomEvent("amadeus-tts-end"));
+      console.error("[TTS] 播放错误:", e);
+      window.dispatchEvent(new CustomEvent("amadeus-tts-end", { detail: { token } }));
       cleanup();
       reject(e);
     };
 
-    // 浏览器自动播放策略：需要先 resume AudioContext
     if (audioCtx && audioCtx.state === "suspended") {
       audioCtx.resume().catch(() => { /* 忽略 */ });
     }
 
-    audio.play().then(() => {
-      console.log("[TTS] play() 已开始");
-    }).catch((err) => {
+    audio.play().catch((err) => {
       console.error("[TTS] play() 被拒绝:", err);
-      window.dispatchEvent(new CustomEvent("amadeus-tts-end"));
+      window.dispatchEvent(new CustomEvent("amadeus-tts-end", { detail: { token } }));
       cleanup();
       reject(err);
     });
+  });
+}
+
+/**
+ * 依次播放多段音频，段与段之间无明显停顿。
+ *
+ * 每段独立解码播放，第一段一拿到就开始出声 —— 这就是"边想边说"的实现。
+ * 也用于「口癖原声 + 合成音频」：原声排在第一段，后面紧跟合成，听感是连着的。
+ * Live2D 口型：所有段共用一个 analyser（同时只有一段在播，信号不叠加），
+ * tts-start 一直保持到最后一段播完才发 tts-end。
+ */
+function playQueue(sources: AudioSource[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const chain = { stopped: false, audio: null as HTMLAudioElement | null };
+    activeSegmentChain = chain;
+
+    // 预解码所有段，避免段间因解码造成卡顿
+    const audios = sources.map((s) => {
+      const fmt = s.format || "wav";
+      const el = new Audio(s.url ? s.url : `data:audio/${fmt};base64,${s.base64}`);
+      el.preload = "auto";
+      el.volume = 1.0;
+      return el;
+    });
+
+    if (audios.length === 0) {
+      reject(new Error("无可用音频数据"));
+      return;
+    }
+
+    // analyser 只挂在第一段上，供 Live2D 口型同步
+    let audioCtx: AudioContext | null = null;
+    let analyser: AnalyserNode | null = null;
+    try {
+      audioCtx = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
+      analyser = audioCtx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.7;
+      const source = audioCtx.createMediaElementSource(audios[0]);
+      source.connect(analyser);
+      analyser.connect(audioCtx.destination);
+      // ⚠️ 所有段都要接 analyser！之前只挂第一段（"口型靠第一段带"），
+      // 结果第 2 段开始嘴型失效（2026-10-17 用户实测"没对上口型"）。
+      // 多个 source 接同一个 analyser 是允许的（同时只有一段在播，信号不叠加）。
+      for (let i = 1; i < audios.length; i++) {
+        try {
+          const s = audioCtx.createMediaElementSource(audios[i]);
+          s.connect(analyser);
+        } catch {
+          /* 忽略：某些环境每个元素只能建一次 source */
+        }
+      }
+    } catch (err) {
+      console.warn("[TTS] 分段播放 Web Audio 初始化失败，降级普通播放:", err);
+      analyser = null;
+      if (audioCtx) { try { audioCtx.close(); } catch { /* 忽略 */ } audioCtx = null; }
+    }
+
+    // 本次播放会话号（start/end 都带，Live2D 只认自己那次的 end）
+    const token = ++ttsSessionToken;
+
+    const finish = () => {
+      window.dispatchEvent(new CustomEvent("amadeus-tts-end", { detail: { token } }));
+      if (activeSegmentChain === chain) activeSegmentChain = null;
+      for (const a of audios) {
+        // ⚠️ 必须先摘 handler 再清 src（同上：清 src 会异步触发 error，
+        // onerror 里 playNext() 越界后又 finish() 一次 → 多派发一个 end，
+        // 那个迟到的 end 正好落在下一句的 tts-start 之后 → 下一句全程不张嘴）
+        a.onended = null;
+        a.onerror = null;
+        try { a.pause(); } catch { /* 忽略 */ }
+        try { a.src = ""; } catch { /* 忽略 */ }
+      }
+      if (audioCtx) {
+        try { audioCtx.close(); } catch { /* 忽略 */ }
+        audioCtx = null;
+      }
+    };
+
+    window.dispatchEvent(new CustomEvent("amadeus-tts-start", { detail: { analyser, token } }));
+    if (audioCtx && audioCtx.state === "suspended") {
+      audioCtx.resume().catch(() => { /* 忽略 */ });
+    }
+
+    let idx = 0;
+    const playNext = () => {
+      if (chain.stopped) return; // 被 stopCurrentAudio 打断
+      if (idx >= audios.length) {
+        finish();
+        resolve();
+        return;
+      }
+      const a = audios[idx];
+      chain.audio = a;
+      if (activeAudioEl === null || idx === 0) activeAudioEl = a;
+
+      a.onended = () => {
+        idx++;
+        playNext();
+      };
+      a.onerror = (e) => {
+        // 单段失败就跳过，不能因此卡住整条链
+        console.warn(`[TTS] 第 ${idx + 1} 段播放失败，跳过:`, e);
+        idx++;
+        playNext();
+      };
+      a.play().catch((err) => {
+        if (chain.stopped) return;
+        console.warn(`[TTS] 第 ${idx + 1} 段 play() 被拒绝，跳过:`, err);
+        idx++;
+        playNext();
+      });
+    };
+
+    playNext();
   });
 }

@@ -3,8 +3,9 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import SpritePlayer from "./SpritePlayer";
+import { useStageHeight } from "./ViewportScaler";
 import { setSessionLoggedIn, setSessionCharacterId } from "@/lib/auth";
-import { findCharacterByLogin, DEFAULT_CHARACTER, Character } from "@/lib/characters";
+import { findCharacterByLogin, DEFAULT_CHARACTER } from "@/lib/characters";
 
 /**
  * Amadeus 登录界面（复刻自 MAHO-Amadeus 项目的 login.vue）
@@ -21,31 +22,40 @@ export default function LoginForm() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
-  const [rememberMe, setRememberMe] = useState(false);
   const [savedAccounts, setSavedAccounts] = useState<Record<string, string>>({});
   const bgmRef = useRef<HTMLAudioElement | null>(null);
-  // 登录界面整体同步缩放：以 900px 高度为基准，scale 随窗口高度变化
-  // 最外层 div 设置 fontSize = baseFont * scale，内部所有 em 单位会跟着按比例缩放
-  const BASE_HEIGHT = 900;
+  // 登录界面缩放基准（2026-10-25）
+  // 整体缩放已改由根字号驱动（见 app/layout.tsx：html fontSize = 100vw/80），
+  // 这里只需要把内部 em 单位对齐到与聊天页一致的比例 —— 基准取舞台设计高度 720。
+  const BASE_HEIGHT = 720;
   const BASE_FONT = 16;
-  const [scale, setScale] = useState(1);
-  useEffect(() => {
-    const update = () => setScale(window.innerHeight / BASE_HEIGHT);
-    update();
-    window.addEventListener("resize", update);
-    return () => window.removeEventListener("resize", update);
-  }, []);
+  const stageHeight = useStageHeight();
+  const scale = stageHeight / BASE_HEIGHT;
 
   // 浏览器自动播放策略：首次点击触发 BGM
   useEffect(() => {
     const onFirstClick = () => {
-      if (bgmRef.current) {
+      if (bgmRef.current && localStorage.getItem("amadeus_bgm_enabled") !== "false") {
         bgmRef.current.play().catch(() => { /* 静默失败 */ });
       }
     };
     document.addEventListener("click", onFirstClick, { once: true });
     return () => document.removeEventListener("click", onFirstClick);
   }, []);
+
+  // 背景音乐开关（与主界面共用同一个偏好 key：登录页和聊天页联动）
+  // 登录页每次进入都默认开着音乐（2026-10-18 用户定案）；
+  // 点开关后写入偏好 key，主界面按上一次的开关状态来
+  const [bgmOn, setBgmOn] = useState(true);
+  useEffect(() => {
+    if (!bgmRef.current) return;
+    if (bgmOn) {
+      bgmRef.current.volume = 1;
+    } else {
+      bgmRef.current.pause();
+      bgmRef.current.currentTime = 0;
+    }
+  }, [bgmOn]);
 
   // 已登录直接跳主页（会话级内存变量，刷新会丢）
   useEffect(() => {
@@ -65,7 +75,6 @@ export default function LoginForm() {
         if (last && accounts[last]) {
           setUsername(last);
           setPassword(accounts[last]);
-          setRememberMe(true);
         }
       } catch { /* 忽略损坏的数据 */ }
     }
@@ -94,11 +103,8 @@ export default function LoginForm() {
     let data: { accounts: Record<string, string>; lastAccount: string } = { accounts: {}, lastAccount: "" };
     try { data = JSON.parse(savedRaw || "{}"); } catch { /* 用默认 */ }
     if (!data.accounts) data.accounts = {};
-    if (rememberMe) {
-      data.accounts[username.trim()] = password.trim();
-    } else {
-      delete data.accounts[username.trim()];
-    }
+    // 2026-10-18 用户定案：三个账号恒记住，不再依赖勾选框
+    data.accounts[username.trim()] = password.trim();
     data.lastAccount = username.trim();
     localStorage.setItem("amadeus_saved_logins", JSON.stringify(data));
     setSavedAccounts(data.accounts);
@@ -116,7 +122,7 @@ export default function LoginForm() {
         backgroundSize: "cover",
         backgroundPosition: "center",
         backgroundRepeat: "no-repeat",
-        minHeight: "100vh",
+        minHeight: "100%",
         position: "relative",
         overflowX: "visible",
         overflowY: "hidden",
@@ -124,6 +130,33 @@ export default function LoginForm() {
       }}
     >
       <audio ref={bgmRef} src={DEFAULT_CHARACTER.bgm} autoPlay loop />
+
+      {/* 背景音乐开关（与主界面共用同一偏好 key）
+          2026-10-25：样式改成和聊天界面那颗音符完全一致（纯图标、无方框背景），
+          位置也统一到 right-[6rem] —— 登录页 3 个图标、聊天页 4 个（多一个设置），
+          把"设置"排在更左边，BGM 位置就两页恒定。 */}
+      <button
+        onClick={() => {
+          const next = !bgmOn;
+          setBgmOn(next);
+          localStorage.setItem("amadeus_bgm_enabled", String(next));
+          console.log(`[BGM] 登录页背景音乐已${next ? "开启" : "关闭"}`);
+        }}
+        aria-label="背景音乐"
+        className="absolute right-[6rem] top-4 p-2 text-zinc-400 hover:text-white transition-colors"
+        style={{ zIndex: 60 }}
+      >
+        {bgmOn ? (
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 9.75V19.5m0 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm0-9.75L19.5 6.75v9.75m0 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0V6.75" />
+          </svg>
+        ) : (
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 9.75V19.5m0 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm0-9.75L19.5 6.75v9.75m0 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0V6.75" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4 4l16 16" />
+          </svg>
+        )}
+      </button>
 
       {/* 顶部 Logo（SpritePlayer：6 行 7 列 38 帧） */}
       <div
@@ -195,35 +228,6 @@ export default function LoginForm() {
             />
           </div>
           {/* 记住账号密码复选框 */}
-          <label
-            style={{
-              alignSelf: "flex-end",
-              marginTop: "0.8em",
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5em",
-              cursor: "pointer",
-              color: "#F2B03A",
-              fontFamily: "'Consolas', 'monospace'",
-              fontSize: "1.1em",
-              letterSpacing: "1px",
-              textShadow: "0 0 6px rgba(0,0,0,0.9)",
-              userSelect: "none",
-            }}
-          >
-            <input
-              type="checkbox"
-              checked={rememberMe}
-              onChange={(e) => setRememberMe(e.target.checked)}
-              style={{
-                width: "1.1em",
-                height: "1.1em",
-                accentColor: "#D18B24",
-                cursor: "pointer",
-              }}
-            />
-            记住账号密码
-          </label>
           {/* 已保存的账号快速选择：2个以上才显示 */}
           {Object.keys(savedAccounts).length > 1 && (
             <div style={{ alignSelf: "flex-end", marginTop: "0.5em", display: "flex", gap: "0.5em", flexWrap: "wrap", justifyContent: "flex-end" }}>
@@ -233,8 +237,7 @@ export default function LoginForm() {
                   onClick={() => {
                     setUsername(acct);
                     setPassword(savedAccounts[acct]);
-                    setRememberMe(true);
-                  }}
+                            }}
                   style={{
                     background: username === acct ? "#D18B24" : "rgba(0,0,0,0.6)",
                     border: "1px solid #D18B24",

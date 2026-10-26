@@ -5,17 +5,15 @@
   "windows": [
     "main"
   ],
+  "remote": {
+    "urls": [
+      "http://localhost:*",
+      "http://127.0.0.1:*"
+    ]
+  },
   "permissions": [
     "core:default",
-    "fs:default",
-    "fs:allow-mkdir",
-    "fs:allow-write-file",
-    "fs:allow-read-file",
-    "fs:allow-remove",
-    "fs:allow-read-dir",
-    "fs:allow-exists",
-    "fs:allow-rename",
-    "fs:scope-appdata-recursive",
-    "fs:scope-applocaldata-recursive"
+    "core:window:allow-start-dragging",
+    "allow-window-control"
   ]
 }

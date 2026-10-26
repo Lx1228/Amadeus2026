@@ -1,24 +1,37 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { loadSessions, createSession, deleteSession, renameSession, getActiveSession, loadActiveSessionId, saveActiveSessionId, Session, compressSessionMessages, COMPRESS_THRESHOLD } from "@/lib/sessions";
+import { loadSessions, loadActiveSessionId, Session, summarizeOldMessages, AUTO_SUMMARY_THRESHOLD, KEEP_RECENT } from "@/lib/sessions";
 import {
   loadTTSConfig, saveTTSConfig, TTSConfig,
-  loadTTSProvider, saveTTSProvider, TTSProvider,
-  loadAliyunAPIKey, saveAliyunAPIKey,
-  loadMiniMaxAPIKey, saveMiniMaxAPIKey,
-  loadAliyunVoiceId, saveAliyunVoiceId,
-  loadMiniMaxVoiceId, saveMiniMaxVoiceId,
-  loadTTSEngine, saveTTSEngine, TTSEngine,
-  loadCustomTTS, saveCustomTTS,
-  cloneKurisuVoice, isVoiceCloned, setVoiceCloned, clearVoiceCloned, loadClonedVoice,
 } from "@/lib/tts";
 import { setSessionLoggedIn } from "@/lib/auth";
 import { getSessionCharacterId } from "@/lib/auth";
 import { getCharacterById } from "@/lib/characters";
-import { loadAsrConfig, saveAsrConfig, AsrConfig } from "@/lib/asr";
+import { appLog, appErr } from "@/lib/app-log";
+import {
+  CLOUD_MODEL,
+  loadAliyunKey,
+  loadCloudVoices,
+  saveAliyunKey,
+  saveCloudVoice,
+} from "@/lib/cloud-tts";
+import {
+  getProviders,
+  isCustomProvider,
+  loadCustomEndpoint,
+  loadCustomModel,
+  loadKeyForProvider,
+  loadModelConfig,
+  normalizeEndpoint,
+  saveCustomEndpoint,
+  saveCustomModel,
+  saveKeyForProvider,
+  saveModelConfig,
+  ModelConfig,
+} from "@/lib/model-config";
 import { parseMessage } from "@/lib/message-parser";
+import RuntimeLogPanel from "./RuntimeLogPanel";
 
 /** 把时间戳格式化成 YYYY-MM-DD HH:mm:ss */
 function formatTime(ts: number): string {
@@ -107,50 +120,6 @@ async function exportSessionToTxt(session: Session, characterName: string): Prom
   return { saved: true, path: "下载目录" };
 }
 
-export interface ModelConfig {
-  provider: string;
-  endpoint: string;
-  apiKey: string;
-  model: string;
-}
-
-const PROVIDERS: Record<string, { name: string; endpoints: string[]; models: string[] }> = {
-  xiaomi: {
-    name: "小米 MiMo",
-    endpoints: [
-      "https://api.xiaomimimo.com/v1",
-      "https://token-plan-cn.xiaomimimo.com/v1",
-    ],
-    models: [
-      "mimo-v2.5",
-      "mimo-v2.5-pro",
-    ],
-  },
-  deepseek: {
-    name: "DeepSeek",
-    endpoints: ["https://api.deepseek.com/v1"],
-    models: ["deepseek-chat", "deepseek-reasoner"],
-  },
-  custom: {
-    name: "自定义",
-    endpoints: [],
-    models: [],
-  },
-};
-
-const STORAGE_KEY = "amadeus_model_config";
-
-export function loadModelConfig(): ModelConfig {
-  if (typeof window === "undefined") {
-    return { provider: "xiaomi", endpoint: PROVIDERS.xiaomi.endpoints[0], apiKey: "", model: "mimo-v2.5-pro" };
-  }
-  const saved = localStorage.getItem(STORAGE_KEY);
-  return saved ? JSON.parse(saved) : { provider: "xiaomi", endpoint: PROVIDERS.xiaomi.endpoints[0], apiKey: "", model: "mimo-v2.5-pro" };
-}
-
-export function saveModelConfig(config: ModelConfig) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-}
 
 interface SettingsProps {
   open: boolean;
@@ -161,68 +130,92 @@ interface SettingsProps {
 const MENU_ITEMS = [
   { id: "chat-model", label: "Chat模型" },
   { id: "tts", label: "语音合成" },
-  { id: "voice", label: "语音输入" },
   { id: "memory", label: "会话管理" },
-  { id: "general", label: "通用设置" },
+  { id: "logs", label: "运行日志" },
 ];
 
 export default function Settings({ open, onClose, onSave }: SettingsProps) {
-  const router = useRouter();
   const [activeTab, setActiveTab] = useState("chat-model");
+  const PROVIDERS = getProviders();
   const [config, setConfig] = useState<ModelConfig>(loadModelConfig);
   const [showKey, setShowKey] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [activeSessionId, setActiveSessionId] = useState("");
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-  const [editingName, setEditingName] = useState("");
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [compressingId, setCompressingId] = useState<string | null>(null);
-  const [showNewSessionInput, setShowNewSessionInput] = useState(false);
-  const [newSessionName, setNewSessionName] = useState("");
   const [ttsConfig, setTTSConfig] = useState<TTSConfig>(loadTTSConfig);
-  const [aliyunKey, setAliyunKey] = useState("");
-  const [minimaxKey, setMiniMaxKey] = useState("");
-  const [aliyunVoiceId, setAliyunVoiceId] = useState("");
-  const [minimaxVoiceId, setMiniMaxVoiceId] = useState("");
-  const [ttsProvider, setTTSProvider] = useState<TTSProvider>(loadTTSProvider);
-  const [ttsEngine, setTTSEngine] = useState<TTSEngine>(loadTTSEngine);
-  const [customTTS, setCustomTTS] = useState(loadCustomTTS);
-  const [showTTSKeys, setShowTTSKeys] = useState<{ aliyun: boolean; minimax: boolean; custom: boolean }>({
-    aliyun: false,
-    minimax: false,
-    custom: false,
-  });
   // 当前登录角色（用于动态显示角色名）
   const character = getCharacterById(getSessionCharacterId());
 
   const [toast, setToast] = useState<string | null>(null);
-
+  // 2026-10-25：本地语音模型功能已整个删除，语音合成只走云端（CosyVoice）。
+  const [aliyunKey, setAliyunKey] = useState("");
+  const [cloudVoices, setCloudVoices] = useState<Record<string, string>>({});
+  const [showCloudKey, setShowCloudKey] = useState(false);
   const [cloning, setCloning] = useState(false);
-  const [voiceCloned, setVoiceClonedState] = useState(false);
-  const [bgmEnabled, setBgmEnabled] = useState(() => {
-    if (typeof window === "undefined") return true;
-    const saved = localStorage.getItem("amadeus_bgm_enabled");
-    return saved !== null ? saved === "true" : true;
-  });
-  const [asrCfg, setAsrCfg] = useState<AsrConfig>(loadAsrConfig);
+
+  /** 一键复刻三个角色的云端音色（免费，约 10 秒） */
+  const cloneAllVoices = async () => {
+    const key = aliyunKey.trim();
+    if (!key) {
+      showToast("请先填写阿里云 API Key");
+      return;
+    }
+    saveAliyunKey(key);
+    setCloning(true);
+    const ids = ["kurisu", "maho", "may"];
+    const next = { ...cloudVoices };
+    let okCount = 0;
+    let lastError = "";
+    /** 把阿里云的英文报错翻成粉丝看得懂的话 */
+    const zhError = (msg: string) => {
+      if (/api-key|api key|invalid|unauthorized|401/i.test(msg)) {
+        return "API Key 无效，请在百炼控制台确认后重填";
+      }
+      if (/too short/i.test(msg)) return "音色样本太短，无法复刻";
+      if (/quota|arrear|balance|欠费|额度|402/i.test(msg)) {
+        return "账号额度不足，请到阿里云百炼充值后再试";
+      }
+      return msg;
+    };
+    for (const id of ids) {
+      try {
+        const res = await fetch("/api/tts/cloud/clone", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ characterId: id, apiKey: key }),
+        });
+        const data = await res.json();
+        if (res.ok && data.voiceId) {
+          saveCloudVoice(id, data.voiceId);
+          next[id] = data.voiceId;
+          okCount += 1;
+          appLog("音色复刻成功", id);
+        } else {
+          lastError = String(data.error || `HTTP ${res.status}`);
+          appErr("音色复刻", `${id}：${lastError}`);
+        }
+      } catch (e) {
+        appErr("音色复刻", `${id}：${e instanceof Error ? e.message : "网络异常"}`);
+      }
+    }
+    setCloudVoices(next);
+    setCloning(false);
+    showToast(
+      okCount === 3
+        ? "三个音色复刻完成，可以开始说话了"
+        : `复刻完成 ${okCount}/3 — ${zhError(lastError || "未知原因")}`
+    );
+  };
 
   useEffect(() => {
+    if (!open) return; // 挂载(open=false)时不记，面板真正打开才记一次
     setConfig(loadModelConfig());
     setSessions(loadSessions());
     setActiveSessionId(loadActiveSessionId());
     setTTSConfig(loadTTSConfig());
-    setAliyunKey(loadAliyunAPIKey());
-    setMiniMaxKey(loadMiniMaxAPIKey());
-    setAliyunVoiceId(loadAliyunVoiceId());
-    setMiniMaxVoiceId(loadMiniMaxVoiceId());
-    setTTSProvider(loadTTSProvider());
-    setTTSEngine(loadTTSEngine());
-    setCustomTTS(loadCustomTTS());
-    setVoiceClonedState(isVoiceCloned());
-    setAsrCfg(loadAsrConfig());
+    setAliyunKey(loadAliyunKey());
+    setCloudVoices(loadCloudVoices());
   }, [open]);
-
-  if (!open) return null;
 
   const provider = PROVIDERS[config.provider] || PROVIDERS.xiaomi;
 
@@ -231,72 +224,66 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
     setTimeout(() => setToast(null), 2000);
   };
 
-  // 通知 Chat 组件设置已变更，需实时重载（BGM 立即静音/恢复，模型/TTS 配置即时生效）
+  // 通知 Chat 组件设置已变更，需实时重载（模型 / TTS 配置即时生效）
   const notifyChange = () => {
     if (typeof window !== "undefined") {
       window.dispatchEvent(new Event("amadeus-settings-change"));
     }
   };
 
+  // 所有 hook 必须在这个 return 之前执行完。
+  // 放在中间的 useEffect 会让 open 关闭时 hook 数量变少，
+  // React 抛 "error #310: Rendered more hooks than during the previous render" 直接崩页。
+  if (!open) return null;
+
   const handleProviderChange = (value: string) => {
+    // 2026-10-25：这里**不**再做"把当前 key 存回当前槽"的动作。
+    // 因为 config.apiKey 可能是老版本遗留的共享 key（别家的），
+    // 一存就把脏值固化进当前提供商的槽里，以后每次切回来都会被回填。
+    // key 只在用户真正在输入框里改的时候才写槽（见 onChange）。
+    const keyForTarget = loadKeyForProvider(value);
+
+    // 自定义接口（2026-10-25 接回）：endpoint / model 由用户手填。
+    // 这里刻意**不**把上一家的地址预填进来 —— 之前那版会预填小米的地址和
+    // mimo-v2.6-pro，用户以为"系统自动帮我选了小米"，实际是自己的配置没生效。
+    // 改用自己的记忆：上次填过就恢复，从没填过就是空的 + 占位提示。
+    if (isCustomProvider(value)) {
+      const updated = {
+        provider: value,
+        endpoint: loadCustomEndpoint(),
+        apiKey: keyForTarget,
+        model: loadCustomModel(),
+      };
+      setConfig(updated);
+      saveModelConfig(updated);
+      notifyChange();
+      appLog("切换 Chat 接口", "自定义接口");
+      showToast("已切换到自定义接口，请填写接口地址和模型名");
+      return;
+    }
     const p = PROVIDERS[value];
-    const updated = { provider: value, endpoint: p.endpoints[0], apiKey: config.apiKey, model: p.models[0] };
+    const updated = { provider: value, endpoint: p.endpoints[0], apiKey: keyForTarget, model: p.models[0] };
     setConfig(updated);
     saveModelConfig(updated);
     notifyChange();
+    appLog("切换 Chat 接口", p.name);
     showToast(`已切换到 ${p.name}`);
-  };
-
-  const handleNewSession = () => {
-    if (newSessionName.trim()) {
-      createSession(newSessionName.trim());
-      setNewSessionName("");
-      setShowNewSessionInput(false);
-      setSessions(loadSessions());
-      setActiveSessionId(loadActiveSessionId());
-      showToast("新会话已创建");
-    }
-  };
-
-  const handleDeleteSession = (id: string) => {
-    deleteSession(id);
-    setDeleteConfirmId(null);
-    setSessions(loadSessions());
-    setActiveSessionId(loadActiveSessionId());
-    showToast("会话已删除");
-  };
-
-  const handleRenameSession = (id: string) => {
-    if (editingName.trim()) {
-      renameSession(id, editingName.trim());
-      setEditingSessionId(null);
-      setEditingName("");
-      setSessions(loadSessions());
-      showToast("会话已重命名");
-    }
-  };
-
-  const handleSwitchSession = (id: string) => {
-    saveActiveSessionId(id);
-    setActiveSessionId(id);
-    showToast("已切换会话");
   };
 
   const handleCompressSession = async (id: string) => {
     setCompressingId(id);
     try {
       const cfg = loadModelConfig();
-      const result = await compressSessionMessages(id, cfg);
-      if (result === -1) {
-        showToast(`消息数未达 ${COMPRESS_THRESHOLD} 条，无需压缩`);
-      } else if (result === -2) {
-        showToast("压缩失败，请检查 API Key 或网络");
-      } else {
+      const result = await summarizeOldMessages(id, cfg);
+      if (result) {
         setSessions(loadSessions());
-        showToast(`已压缩，保留 ${result} 条消息`);
+        appLog("整理会话记忆", `${result.summarized} 条旧对话并入长期记忆`);
+        showToast(`已把 ${result.summarized} 条旧对话并入长期记忆（原文保留）`);
+      } else {
+        showToast("暂时不用整理：消息还不够，或 API Key / 网络有问题");
       }
     } catch {
-      showToast("压缩失败");
+      showToast("整理失败");
     } finally {
       setCompressingId(null);
     }
@@ -308,6 +295,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
       if (result.cancelled) {
         showToast("已取消导出");
       } else if (result.saved) {
+        appLog("导出会话 TXT", `${session.messages.length} 条消息`);
         showToast(`已导出 ${session.messages.length} 条消息 → ${result.path || "本地"}`);
       } else {
         showToast("导出失败");
@@ -318,19 +306,22 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+    // 2026-10-25：用 absolute 而不是 fixed。外层 ViewportScaler 改用 CSS zoom 后
+    // 不再像 transform 那样建立包含块，fixed 会相对**整个窗口**定位，
+    // 窗口比例和舞台比例不一致时遮罩会盖不满/盖过头。absolute 相对舞台，永远正确。
+    <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/70">
       <div
         className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-2xl h-[500px] flex overflow-hidden"
       >
         {/* 左侧菜单 */}
-        <div className="w-48 bg-zinc-950 border-r border-zinc-700 p-4">
+        <div className="w-48 shrink-0 bg-zinc-950 border-r border-zinc-700 p-4">
           <h2 className="text-sm font-mono text-zinc-500 mb-4 px-2">设置</h2>
           <nav className="space-y-1">
             {MENU_ITEMS.map((item) => (
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-mono transition-colors ${
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-mono whitespace-nowrap transition-colors ${
                   activeTab === item.id
                     ? "bg-[#8C4F14]/50 text-[#F2B03A]"
                     : "text-zinc-400 hover:bg-zinc-800 hover:text-white"
@@ -343,25 +334,25 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
         </div>
 
         {/* 右侧内容 */}
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col min-w-0">
           <div className="flex items-center justify-between p-4 border-b border-zinc-800">
             <h2 className="text-lg font-mono text-[#F2B03A]">
-              {activeTab === "chat-model" ? "Chat模型" : activeTab === "tts" ? "语音合成" : activeTab === "voice" ? "语音输入" : activeTab === "memory" ? "会话管理" : "通用设置"}
+              {MENU_ITEMS.find((m) => m.id === activeTab)?.label ?? "设置"}
             </h2>
             <div className="flex gap-2">
               <button
                 onClick={() => {
                   // 用 location.replace 强制整页刷新到登录页，绕过 React 状态更新 + 组件卸载的开销
                   setSessionLoggedIn(false);
+                  appLog("退出登录");
                   window.location.replace("/login");
                 }}
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-red-900/40 hover:bg-red-900/70 border border-red-700 rounded-lg text-xs font-mono text-red-300 hover:text-red-200 transition-colors"
-                title="退出当前账号，返回登录界面"
               >
                 退出登录
               </button>
               <button onClick={onClose} className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 rounded-lg text-xs font-mono text-zinc-300 hover:text-white transition-colors">
-                <span>←</span> 返回聊天
+                返回聊天
               </button>
             </div>
           </div>
@@ -384,19 +375,40 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
 
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1 font-mono">接口协议</label>
-                  {config.provider === "custom" ? (
-                    <input
-                      type="text"
-                      value={config.endpoint}
-                      onChange={(e) => {
-                        const updated = { ...config, endpoint: e.target.value };
-                        setConfig(updated);
-                        saveModelConfig(updated);
-                        notifyChange();
-                      }}
-                      placeholder="https://api.example.com/v1"
-                      className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
-                    />
+                  {isCustomProvider(config.provider) ? (
+                    <>
+                      <input
+                        type="text"
+                        value={config.endpoint}
+                        onChange={(e) => {
+                          // 输入即保存（跟预设接口下拉一致）：只靠 onBlur 保存的话，
+                          // 用户填完直接关面板就可能丢掉刚填的地址
+                          const next = { ...config, endpoint: e.target.value };
+                          setConfig(next);
+                          saveModelConfig(next);
+                          saveCustomEndpoint(e.target.value); // 单独记一份，切走再切回不丢
+                          notifyChange();
+                        }}
+                        onBlur={(e) => {
+                          // 用 DOM 里的真实值，别依赖闭包里的 state
+                          const ep = normalizeEndpoint(e.target.value);
+                          const next = { ...config, endpoint: ep };
+                          setConfig(next);
+                          saveModelConfig(next);
+                          saveCustomEndpoint(ep);
+                          notifyChange();
+                          showToast(ep ? "接口地址已保存" : "接口地址为空，聊天会失败");
+                          if (ep) appLog("修改自定义接口地址", ep);
+                        }}
+                        spellCheck={false}
+                        autoComplete="off"
+                        placeholder="https://你的接口地址/v1"
+                        className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
+                      />
+                      <p className="mt-1 text-[11px] text-zinc-500 font-mono">
+                        填 OpenAI 兼容地址，到 /v1 为止（不带 /chat/completions）
+                      </p>
+                    </>
                   ) : (
                     <select
                       value={config.endpoint}
@@ -404,6 +416,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                         setConfig({ ...config, endpoint: e.target.value });
                         saveModelConfig({ ...config, endpoint: e.target.value });
                         notifyChange();
+                        appLog("切换接口地址", e.target.value);
                         showToast("已切换接口");
                       }}
                       className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white"
@@ -423,8 +436,10 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                         type={showKey ? "text" : "password"}
                         value={config.apiKey}
                         onChange={(e) => {
-                          // 只更新本地 state，不自动保存——防浏览器覆盖
+                          // 只更新本地 state，不自动保存——防浏览器覆盖。
+                          // 但按提供商记一份（切走再切回不丢，也不会串到别家）
                           setConfig({ ...config, apiKey: e.target.value });
+                          saveKeyForProvider(config.provider, e.target.value);
                         }}
                         autoComplete="off"
                         name="amadeus-model-key"
@@ -442,7 +457,9 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                     <button
                       onClick={() => {
                         saveModelConfig(config);
+                        saveKeyForProvider(config.provider, config.apiKey);
                         notifyChange();
+                        appLog("保存 Chat 接口 Key", `${config.provider}（${config.apiKey.length} 字符）`);
                         showToast(`API Key 已保存（${config.apiKey.length} 字符）`);
                       }}
                       className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm whitespace-nowrap"
@@ -454,19 +471,37 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
 
                 <div>
                   <label className="block text-xs text-zinc-400 mb-1 font-mono">模型</label>
-                  {config.provider === "custom" ? (
-                    <input
-                      type="text"
-                      value={config.model}
-                      onChange={(e) => {
-                        const updated = { ...config, model: e.target.value };
-                        setConfig(updated);
-                        saveModelConfig(updated);
-                        notifyChange();
-                      }}
-                      placeholder="gpt-4o / claude-3-opus / ..."
-                      className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
-                    />
+                  {isCustomProvider(config.provider) ? (
+                    <>
+                      <input
+                        type="text"
+                        value={config.model}
+                        onChange={(e) => {
+                          const next = { ...config, model: e.target.value };
+                          setConfig(next);
+                          saveModelConfig(next);
+                          saveCustomModel(e.target.value); // 单独记一份，切走再切回不丢
+                          notifyChange();
+                        }}
+                        onBlur={(e) => {
+                          const m = e.target.value.trim();
+                          const next = { ...config, model: m };
+                          setConfig(next);
+                          saveModelConfig(next);
+                          saveCustomModel(m);
+                          notifyChange();
+                          showToast(m ? `模型已设为 ${m}` : "模型名为空，聊天会失败");
+                          if (m) appLog("设置自定义模型名", m);
+                        }}
+                        spellCheck={false}
+                        autoComplete="off"
+                        placeholder="模型名，例如 gpt-4o-mini"
+                        className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
+                      />
+                      <p className="mt-1 text-[11px] text-zinc-500 font-mono">
+                        按服务商文档填，必须和接口支持的模型名完全一致
+                      </p>
+                    </>
                   ) : (
                     <select
                       value={config.model}
@@ -474,6 +509,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                         setConfig({ ...config, model: e.target.value });
                         saveModelConfig({ ...config, model: e.target.value });
                         notifyChange();
+                        appLog("切换 Chat 模型", e.target.value);
                         showToast(`已切换到 ${e.target.value}`);
                       }}
                       className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white"
@@ -489,10 +525,68 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
 
             {activeTab === "tts" && (
               <div className="space-y-5">
+                {/* ===== 云端配置（唯一引擎，2026-10-25 本地模型已删） ===== */}
+                <div className="space-y-3">
+                  <div className="bg-zinc-800/40 border border-zinc-700 rounded-lg p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-mono text-zinc-200">阿里云 API Key</h4>
+                      <span className="text-xs font-mono text-zinc-500">{CLOUD_MODEL}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <input
+                        type={showCloudKey ? "text" : "password"}
+                        value={aliyunKey}
+                        onChange={(e) => {
+                          setAliyunKey(e.target.value);
+                          saveAliyunKey(e.target.value);
+                        }}
+                        onBlur={(e) => {
+                          if (e.target.value.trim()) appLog("保存阿里云 API Key", `${e.target.value.trim().length} 字符`);
+                        }}
+                        placeholder="sk-...（你自己的百炼 API Key）"
+                        className="flex-1 bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
+                      />
+                      <button
+                        onClick={() => setShowCloudKey(!showCloudKey)}
+                        className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg font-mono text-xs"
+                      >
+                        {showCloudKey ? "隐藏" : "显示"}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="bg-zinc-800/40 border border-zinc-700 rounded-lg p-4 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-mono text-zinc-200">音色复刻</h4>
+                      <button
+                        onClick={() => void cloneAllVoices()}
+                        disabled={cloning}
+                        className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm disabled:opacity-50"
+                      >
+                        {cloning ? "复刻中…" : "一键复刻三个角色"}
+                      </button>
+                    </div>
+                    <div className="space-y-1">
+                      {[
+                        { id: "kurisu", name: "牧濑红莉栖" },
+                        { id: "maho", name: "比屋定真帆" },
+                        { id: "may", name: "椎名真由理" },
+                      ].map((c) => (
+                        <div key={c.id} className="flex items-center justify-between text-xs font-mono">
+                          <span className="text-zinc-300">{c.name}</span>
+                          <span className={cloudVoices[c.id] ? "text-green-400" : "text-amber-400"}>
+                            {cloudVoices[c.id] ? "已复刻" : "未复刻"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
                 {/* 启用开关 */}
                 <div className="flex items-center justify-between">
                   <div>
-                    <h3 className="text-sm font-mono text-zinc-200">启用语音合成</h3>
+                    <h3 className="text-sm font-mono text-zinc-200">启用</h3>
                   </div>
                   <button
                     onClick={() => {
@@ -501,6 +595,7 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                       saveTTSConfig(updated);
                       notifyChange();
                       showToast(updated.enabled ? "语音合成已开启" : "语音合成已关闭");
+                      appLog("语音合成", updated.enabled ? "已开启（云端 CosyVoice）" : "已关闭");
                     }}
                     className={`w-12 h-6 rounded-full transition-colors relative ${
                       ttsConfig.enabled ? "bg-[#D18B24]" : "bg-zinc-700"
@@ -514,496 +609,43 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                   </button>
                 </div>
 
-                {/* TTS 提供商 */}
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1 font-mono">TTS 提供商</label>
-                  <select
-                    value={ttsProvider}
-                    onChange={(e) => {
-                      const p = e.target.value as TTSProvider;
-                      setTTSProvider(p);
-                      saveTTSProvider(p);
-                      // 切换提供商时自动选择该提供商的第一个引擎
-                      if (p === "aliyun") {
-                        setTTSEngine("cosyvoice-v3.5-flash");
-                        saveTTSEngine("cosyvoice-v3.5-flash");
-                      } else if (p === "minimax") {
-                        setTTSEngine("speech-2.8-hd");
-                        saveTTSEngine("speech-2.8-hd");
-                      }
-                      notifyChange();
-                      showToast(`已切换到 ${p === "aliyun" ? "阿里云百炼" : p === "minimax" ? "MiniMax" : "自定义"}`);
-                    }}
-                    className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white"
-                  >
-                    <option value="aliyun">阿里云百炼</option>
-                    <option value="minimax">MiniMax</option>
-                    <option value="custom">自定义</option>
-                  </select>
-                </div>
-
-                {/* 阿里云百炼 */}
-                {ttsProvider === "aliyun" && (
-                  <>
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1 font-mono">阿里云 API Key</label>
-                      <div className="flex gap-2">
-                        <div className="relative flex-1">
-                          <input
-                            type={showTTSKeys.aliyun ? "text" : "password"}
-                            value={aliyunKey}
-                            onChange={(e) => setAliyunKey(e.target.value)}
-                            autoComplete="off"
-                            name="amadeus-aliyun-key"
-                            placeholder="sk-xxxxxxxx"
-                            className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500 pr-16"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowTTSKeys((s) => ({ ...s, aliyun: !s.aliyun }))}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-zinc-400 hover:text-white"
-                          >
-                            {showTTSKeys.aliyun ? "隐藏" : "显示"}
-                          </button>
-                        </div>
-                        <button
-                          onClick={() => {
-                            const trimmed = aliyunKey.trim();
-                            setAliyunKey(trimmed);
-                            saveAliyunAPIKey(trimmed);
-                            notifyChange();
-                            showToast(`阿里云 Key 已保存（${trimmed.length} 字符）`);
-                          }}
-                          className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm whitespace-nowrap"
-                        >
-                          保存
-                        </button>
-                      </div>
-                      <p className="text-xs text-zinc-600 mt-1">
-                        当前已保存：{loadAliyunAPIKey() ? `sk-***${loadAliyunAPIKey().slice(-4)}（${loadAliyunAPIKey().length} 字符）` : "未配置"}
-                      </p>
-                    </div>
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1 font-mono">TTS 引擎</label>
-                      <select
-                        value={ttsEngine}
-                        onChange={(e) => {
-                          const engine = e.target.value as TTSEngine;
-                          setTTSEngine(engine);
-                          saveTTSEngine(engine);
-                          notifyChange();
-                          showToast(`已切换到 ${engine}`);
-                        }}
-                        className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white"
-                      >
-                        <option value="qwen3-tts-vc">Qwen3-TTS-VC（推荐，支持一键克隆）</option>
-                        <option value="cosyvoice-v3.5-flash">CosyVoice v3.5-flash（需手动克隆填 ID）</option>
-                        <option value="cosyvoice-v3.5-plus">CosyVoice v3.5-plus（需手动克隆填 ID）</option>
-                      </select>
-                      <p className="text-xs text-zinc-600 mt-1">一键克隆的音色只能配合 Qwen3-TTS-VC 引擎。CosyVoice 需自行到阿里云控制台克隆并填入音色 ID。</p>
-                    </div>
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1 font-mono">一键克隆{character.name}音色</label>
-                      <div className="bg-zinc-800/50 border border-[#8C4F14] rounded-lg p-3">
-                        <p className="text-xs text-zinc-400 mb-2 leading-relaxed">
-                          {voiceCloned
-                            ? `已克隆，音色名：${loadClonedVoice() || "（未知）"}。引擎已自动切到 Qwen3-TTS-VC。`
-                            : `内置${character.name}音色样本，填好上方 API Key 后点下方按钮，自动克隆到你的阿里云账号。无需手动去控制台操作。`}
-                        </p>
-                        <div className="flex gap-2">
-                          <button
-                            disabled={cloning || !aliyunKey.trim()}
-                            onClick={async () => {
-                              const key = aliyunKey.trim();
-                              if (!key) { showToast("请先填写并保存阿里云 API Key"); return; }
-                              setCloning(true);
-                              try {
-                                showToast("正在克隆音色，约需 5-15 秒...");
-                                const { voice, fallbackMode, sampleFile, characterId: clonedCharId } = await cloneKurisuVoice(key);
-                                setVoiceCloned(voice);
-                                setVoiceClonedState(true);
-                                // 自动切到 qwen3-tts-vc 引擎（克隆音色只能配合这个引擎）
-                                setTTSEngine("qwen3-tts-vc");
-                                saveTTSEngine("qwen3-tts-vc");
-                                // 清空手填的 voiceId（用克隆的）
-                                setAliyunVoiceId("");
-                                saveAliyunVoiceId("");
-                                notifyChange();
-                                showToast(fallbackMode
-                                  ? `克隆成功（降级）：${voice} | 样本=${sampleFile} | 角色=${clonedCharId}`
-                                  : `克隆成功！${voice} | 样本=${sampleFile}`);
-                              } catch (e) {
-                                showToast(`克隆失败：${e instanceof Error ? e.message : "未知错误"}`);
-                              } finally {
-                                setCloning(false);
-                              }
-                            }}
-                            className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] disabled:opacity-40 disabled:cursor-not-allowed text-white rounded-lg font-mono text-sm whitespace-nowrap transition-colors"
-                          >
-                            {cloning ? "克隆中..." : voiceCloned ? "重新克隆" : "一键克隆"}
-                          </button>
-                          {voiceCloned && (
-                            <button
-                              onClick={() => {
-                                clearVoiceCloned();
-                                setVoiceClonedState(false);
-                                showToast("已清除克隆标记，可重新克隆");
-                              }}
-                              className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded-lg font-mono text-sm whitespace-nowrap"
-                            >
-                              清除标记
-                            </button>
-                          )}
-                        </div>
-                        {voiceCloned && (
-                          <p className="text-xs text-[#F2B03A] mt-2">
-                            ✓ 已克隆。现在直接去聊天，红莉栖就能说话了。
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    {/* TTS 测试按钮已移除：切换引擎后固定文本会因音色不匹配报错，
-                        实际效果请直接在聊天界面发消息测试 */}
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1 font-mono">音色 ID（可选）</label>
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={aliyunVoiceId}
-                          onChange={(e) => setAliyunVoiceId(e.target.value)}
-                          autoComplete="off"
-                          placeholder="留空用默认，需自行克隆音色"
-                          className="flex-1 bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
-                        />
-                        <button
-                          onClick={() => {
-                            const trimmed = aliyunVoiceId.trim();
-                            setAliyunVoiceId(trimmed);
-                            saveAliyunVoiceId(trimmed);
-                            notifyChange();
-                            showToast(trimmed ? "音色 ID 已保存" : "已清空，将使用默认音色");
-                          }}
-                          className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm whitespace-nowrap"
-                        >
-                          保存
-                        </button>
-                      </div>
-                      <p className="text-xs text-zinc-600 mt-1">
-                        留空用一键克隆的音色（推荐）。如想用 CosyVoice 引擎，需自行到阿里云控制台克隆音色后把 ID 填这里。
-                      </p>
-                    </div>
-                  </>
-                )}
-
-                {/* MiniMax */}
-                {ttsProvider === "minimax" && (
-                  <>
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1 font-mono">MiniMax API Key</label>
-                      <div className="flex gap-2">
-                        <div className="relative flex-1">
-                          <input
-                            type={showTTSKeys.minimax ? "text" : "password"}
-                            value={minimaxKey}
-                            onChange={(e) => setMiniMaxKey(e.target.value)}
-                            autoComplete="off"
-                            name="amadeus-minimax-key"
-                            placeholder="sk-api-xxxxxxxx"
-                            className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500 pr-16"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowTTSKeys((s) => ({ ...s, minimax: !s.minimax }))}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-zinc-400 hover:text-white"
-                          >
-                            {showTTSKeys.minimax ? "隐藏" : "显示"}
-                          </button>
-                        </div>
-                        <button
-                          onClick={() => {
-                            const trimmed = minimaxKey.trim();
-                            setMiniMaxKey(trimmed);
-                            saveMiniMaxAPIKey(trimmed);
-                            notifyChange();
-                            showToast(`MiniMax Key 已保存（${trimmed.length} 字符）`);
-                          }}
-                          className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm whitespace-nowrap"
-                        >
-                          保存
-                        </button>
-                      </div>
-                      <p className="text-xs text-zinc-600 mt-1">
-                        当前已保存：{loadMiniMaxAPIKey() ? `***${loadMiniMaxAPIKey().slice(-4)}（${loadMiniMaxAPIKey().length} 字符）` : "未配置"}
-                      </p>
-                    </div>
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1 font-mono">TTS 引擎</label>
-                      <select
-                        value={ttsEngine}
-                        onChange={(e) => {
-                          const engine = e.target.value as TTSEngine;
-                          setTTSEngine(engine);
-                          saveTTSEngine(engine);
-                          notifyChange();
-                          showToast(`已切换到 ${engine}`);
-                        }}
-                        className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white"
-                      >
-                        <option value="speech-2.8-hd">speech-2.8-hd（最新，情绪渲染融合语气词）</option>
-                        <option value="speech-2.8-turbo">speech-2.8-turbo（最新，极致速度）</option>
-                        <option value="speech-2.6-hd">speech-2.6-hd（韵律表现出色）</option>
-                        <option value="speech-2.6-turbo">speech-2.6-turbo（音质优异，超低时延）</option>
-                        <option value="speech-02-hd">speech-02-hd（复刻相似度高）</option>
-                        <option value="speech-02-turbo">speech-02-turbo（小语种能力加强）</option>
-                      </select>
-                      <p className="text-xs text-zinc-600 mt-1">所有模型都支持情绪控制，会根据语境自动调节语气</p>
-                    </div>
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1 font-mono">音色 ID（可选）</label>
-                      <div className="flex gap-2">
-                        <input
-                          type="text"
-                          value={minimaxVoiceId}
-                          onChange={(e) => setMiniMaxVoiceId(e.target.value)}
-                          autoComplete="off"
-                          placeholder="留空用默认 kurisu-amadeus"
-                          className="flex-1 bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
-                        />
-                        <button
-                          onClick={() => {
-                            const trimmed = minimaxVoiceId.trim();
-                            setMiniMaxVoiceId(trimmed);
-                            saveMiniMaxVoiceId(trimmed);
-                            notifyChange();
-                            showToast(trimmed ? "音色 ID 已保存" : "已清空，将使用默认音色");
-                          }}
-                          className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm whitespace-nowrap"
-                        >
-                          保存
-                        </button>
-                      </div>
-                      <p className="text-xs text-zinc-600 mt-1">
-                        在 MiniMax 控制台「声音复刻」复刻音色后，把得到的音色 ID 填这里。
-                      </p>
-                    </div>
-                  </>
-                )}
-
-                {/* 自定义 */}
-                {ttsProvider === "custom" && (
-                  <>
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1 font-mono">接口协议</label>
-                      <input
-                        type="text"
-                        value={customTTS.endpoint}
-                        onChange={(e) => {
-                          const updated = { ...customTTS, endpoint: e.target.value };
-                          setCustomTTS(updated);
-                          saveCustomTTS(updated);
-                          notifyChange();
-                        }}
-                        placeholder="https://api.example.com/v1"
-                        className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1 font-mono">模型</label>
-                      <input
-                        type="text"
-                        value={customTTS.model}
-                        onChange={(e) => {
-                          const updated = { ...customTTS, model: e.target.value };
-                          setCustomTTS(updated);
-                          saveCustomTTS(updated);
-                          notifyChange();
-                        }}
-                        placeholder="model-name"
-                        className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs text-zinc-400 mb-1 font-mono">API Key</label>
-                      <div className="flex gap-2">
-                        <div className="relative flex-1">
-                          <input
-                            type={showTTSKeys.custom ? "text" : "password"}
-                            value={customTTS.apiKey}
-                            onChange={(e) => {
-                              // 只更新本地 state，不自动保存——防浏览器覆盖
-                              setCustomTTS({ ...customTTS, apiKey: e.target.value });
-                            }}
-                            autoComplete="off"
-                            name="amadeus-custom-key"
-                            placeholder="your-api-key"
-                            className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500 pr-16"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setShowTTSKeys((s) => ({ ...s, custom: !s.custom }))}
-                            className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-zinc-400 hover:text-white"
-                          >
-                            {showTTSKeys.custom ? "隐藏" : "显示"}
-                          </button>
-                        </div>
-                        <button
-                          onClick={() => {
-                            const trimmed = customTTS.apiKey.trim();
-                            const updated = { ...customTTS, apiKey: trimmed };
-                            setCustomTTS(updated);
-                            saveCustomTTS(updated);
-                            notifyChange();
-                            showToast(`自定义 Key 已保存（${trimmed.length} 字符）`);
-                          }}
-                          className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm whitespace-nowrap"
-                        >
-                          保存
-                        </button>
-                      </div>
-                      <p className="text-xs text-zinc-600 mt-1">
-                        当前已保存：{loadCustomTTS().apiKey ? `***${loadCustomTTS().apiKey.slice(-4)}（${loadCustomTTS().apiKey.length} 字符）` : "未配置"}
-                      </p>
-                    </div>
-                  </>
-                )}
-                {/* TTS 设置保存按钮 */}
-                <div className="flex justify-end pt-4 border-t border-zinc-800 gap-2">
-                  <button
-                    className="px-4 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm"
-                    onClick={() => {
-                      // trim 掉复制时可能带入的空格/换行符
-                      const trimmedAliyun = aliyunKey.trim();
-                      const trimmedMinimax = minimaxKey.trim();
-                      const trimmedCustom = { ...customTTS, apiKey: customTTS.apiKey.trim() };
-                      setAliyunKey(trimmedAliyun);
-                      setMiniMaxKey(trimmedMinimax);
-                      setCustomTTS(trimmedCustom);
-                      // 显式保存所有 TTS 配置
-                      saveTTSConfig(ttsConfig);
-                      saveTTSProvider(ttsProvider);
-                      saveTTSEngine(ttsEngine);
-                      saveAliyunAPIKey(trimmedAliyun);
-                      saveMiniMaxAPIKey(trimmedMinimax);
-                      saveCustomTTS(trimmedCustom);
-                      notifyChange();
-                      const keyForMask = trimmedAliyun || trimmedMinimax || trimmedCustom.apiKey || "";
-                      const maskedKey = keyForMask
-                        ? `***${keyForMask.slice(-4)}`
-                        : "未填写";
-                      showToast(`TTS 设置已保存（Key: ${maskedKey}，共 ${keyForMask.length} 字符）`);
-                    }}
-                  >
-                    保存 TTS 设置
-                  </button>
-                </div>
               </div>
             )}
 
             {activeTab === "memory" && (
               <div className="flex-1 flex flex-col">
-                <div className="flex items-center justify-between mb-4">
-                  <button
-                    onClick={() => setShowNewSessionInput(true)}
-                    className="text-xs text-[#F2B03A] hover:text-[#F2B03A] font-mono"
-                  >
-                    + 新开会话
-                  </button>
-                </div>
-
-                {showNewSessionInput && (
-                  <div className="flex gap-2 mb-4">
-                    <input
-                      type="text"
-                      value={newSessionName}
-                      onChange={(e) => setNewSessionName(e.target.value)}
-                      placeholder="会话名称..."
-                      className="flex-1 bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") handleNewSession();
-                        if (e.key === "Escape") {
-                          setShowNewSessionInput(false);
-                          setNewSessionName("");
-                        }
-                      }}
-                    />
-                    <button
-                      onClick={handleNewSession}
-                      className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm"
-                    >
-                      创建
-                    </button>
-                    <button
-                      onClick={() => { setShowNewSessionInput(false); setNewSessionName(""); }}
-                      className="px-3 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg font-mono text-sm"
-                    >
-                      取消
-                    </button>
-                  </div>
-                )}
-
                 <div className="flex-1 overflow-y-auto space-y-2 custom-scrollbar">
-                  {sessions.map((session, index) => (
-                    <div
-                      key={session.id}
-                      className={`p-3 rounded-lg border cursor-pointer transition-colors ${
-                        session.id === activeSessionId
-                          ? "bg-[#8C4F14]/30 border-[#8C4F14]"
-                          : "bg-zinc-800/50 border-zinc-700 hover:border-zinc-600"
-                      }`}
-                      onClick={() => handleSwitchSession(session.id)}
-                    >
-                      <div className="flex items-center justify-between">
-                        {editingSessionId === session.id ? (
-                          <input
-                            type="text"
-                            value={editingName}
-                            onChange={(e) => setEditingName(e.target.value)}
-                            className="flex-1 bg-zinc-700 border border-zinc-500 rounded px-2 py-1 text-sm font-mono text-white"
-                            autoFocus
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") handleRenameSession(session.id);
-                              if (e.key === "Escape") { setEditingSessionId(null); setEditingName(""); }
-                            }}
-                            onBlur={() => handleRenameSession(session.id)}
-                          />
-                        ) : (
-                          <span className="text-sm font-mono text-zinc-200 truncate">{session.name}</span>
-                        )}
-                        <div className="flex gap-1 ml-2">
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setEditingSessionId(session.id); setEditingName(session.name); }}
-                            className="w-6 h-6 flex items-center justify-center rounded hover:bg-zinc-700 text-zinc-500 hover:text-white transition-colors"
-                            title="重命名"
-                          >
-                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                              <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6h11.25" />
-                            </svg>
-                          </button>
-                          {index !== 0 && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(session.id); }}
-                              className="w-6 h-6 flex items-center justify-center rounded hover:bg-red-900/50 text-zinc-500 hover:text-red-400 transition-colors"
-                              title="删除"
-                            >
-                              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
-                                <path strokeLinecap="round" strokeLinejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
-                            </svg>
-                          </button>
-                        )}
+                  {sessions.map((session) => {
+                    const summarized = session.summarizedUpTo ?? 0;
+                    // 还能整理多少条（最近 KEEP_RECENT 条永远保留原文）
+                    const pending = session.messages.length - summarized - KEEP_RECENT;
+                    const autoOn = session.messages.length > AUTO_SUMMARY_THRESHOLD;
+                    return (
+                      <div
+                        key={session.id}
+                        // 2026-10-25 重排：原来一行塞了 4 条信息，文字换行成两行、
+                        // 按钮被挤成竖排。现在拆成「信息区 + 操作区」上下两层，
+                        // 按钮各占一半宽度，不会再换行。
+                        className="rounded-lg border border-zinc-700 bg-zinc-800/50 overflow-hidden"
+                      >
+                        <div className="px-4 py-3">
+                          <div className="flex items-baseline gap-1.5">
+                            <span className="text-xl leading-none font-mono text-zinc-100">
+                              {session.messages.length}
+                            </span>
+                            <span className="text-xs font-mono text-zinc-400">条消息</span>
+                          </div>
+                          <p className="mt-2 text-[11px] leading-relaxed font-mono text-zinc-500">
+                            {summarized > 0 ? `已整理 ${summarized} 条旧对话` : "还没有整理过"}
+                            <span className="mx-1.5 text-zinc-600">·</span>
+                            {autoOn ? "自动整理已开启" : `超过 ${AUTO_SUMMARY_THRESHOLD} 条自动整理`}
+                          </p>
                         </div>
-                      </div>
-                      <div className="flex items-center justify-between mt-1">
-                        <span className="text-xs text-zinc-500">
-                          {session.messages.length} 条消息
-                          {session.messages.length > COMPRESS_THRESHOLD && (
-                            <span className="text-amber-500 ml-1">（建议压缩）</span>
-                          )}
-                        </span>
-                        <div className="flex items-center gap-2">
+
+                        <div className="grid grid-cols-2 border-t border-zinc-700/60">
                           <button
-                            onClick={(e) => { e.stopPropagation(); handleExportSession(session); }}
-                            className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 font-mono transition-colors"
+                            onClick={() => handleExportSession(session)}
+                            className="flex items-center justify-center gap-1.5 py-2.5 text-xs font-mono whitespace-nowrap text-blue-400 hover:text-blue-300 hover:bg-zinc-800/60 transition-colors"
                             title="导出为 TXT 文件保存到本地"
                           >
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-3.5 h-3.5">
@@ -1011,191 +653,45 @@ export default function Settings({ open, onClose, onSave }: SettingsProps) {
                             </svg>
                             导出 TXT
                           </button>
-                          {session.messages.length > COMPRESS_THRESHOLD && (
-                            <button
-                              onClick={(e) => { e.stopPropagation(); handleCompressSession(session.id); }}
-                              disabled={compressingId === session.id}
-                              className="text-xs text-amber-400 hover:text-amber-300 font-mono disabled:opacity-50 disabled:cursor-wait"
-                              title={`消息超过 ${COMPRESS_THRESHOLD} 条，点击压缩上下文`}
-                            >
-                              {compressingId === session.id ? "压缩中..." : "压缩上下文"}
-                            </button>
-                          )}
-                          {session.id === activeSessionId && (
-                            <span className="text-xs font-mono text-[#F2B03A]">已选择</span>
-                          )}
+                          <button
+                            onClick={() => {
+                              // 灰态也给个解释：disabled 按钮的 title 在浏览器里
+                              // 往往不弹，用户只会看到"点不动"，很困惑（2026-10-25）
+                              if (pending < 10) {
+                                showToast(
+                                  `还需要再聊 ${10 - pending} 条才能整理（最近 ${KEEP_RECENT} 条会保留原文）`
+                                );
+                                return;
+                              }
+                              void handleCompressSession(session.id);
+                            }}
+                            disabled={compressingId === session.id}
+                            className={`flex items-center justify-center gap-1.5 py-2.5 text-xs font-mono whitespace-nowrap border-l border-zinc-700/60 transition-colors ${
+                              pending >= 10
+                                ? "text-amber-400 hover:text-amber-300 hover:bg-zinc-800/60"
+                                : "text-zinc-500 cursor-help"
+                            } disabled:opacity-40 disabled:cursor-not-allowed`}
+                            title="把较早的对话总结进长期记忆（原始消息保留，不会删记录）"
+                          >
+                            {compressingId === session.id ? "整理中..." : "整理记忆"}
+                          </button>
                         </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
-                {deleteConfirmId && (
-                  <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60" onClick={() => setDeleteConfirmId(null)}>
-                    <div className="bg-zinc-800 border border-zinc-600 rounded-xl p-5 w-80" onClick={(e) => e.stopPropagation()}>
-                      <p className="text-sm font-mono text-zinc-200 mb-4">
-                        确定要删除这个会话吗？<br />
-                        <span className="text-red-400">删除后该会话的所有记忆存档将被清空，此操作不可撤销。</span>
-                      </p>
-                      <div className="flex gap-3">
-                        <button
-                          onClick={() => setDeleteConfirmId(null)}
-                          className="flex-1 bg-zinc-700 hover:bg-zinc-600 text-white py-2 rounded-lg font-mono text-sm"
-                        >
-                          取消
-                        </button>
-                        <button
-                          onClick={() => handleDeleteSession(deleteConfirmId)}
-                          className="flex-1 bg-red-600 hover:bg-red-500 text-white py-2 rounded-lg font-mono text-sm"
-                        >
-                          确认删除
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                )}
               </div>
             )}
 
-            {activeTab === "voice" && (
-              <div className="space-y-5">
-                {/* 启用开关 */}
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-sm font-mono text-zinc-200">启用语音通话</h3>
-                    <p className="text-xs text-zinc-600 mt-1">开启后，聊天界面右上角出现电话按钮，可像微信电话一样和{character.name}语音沟通。</p>
-                  </div>
-                  <button
-                    onClick={() => {
-                      const updated = { ...asrCfg, enabled: !asrCfg.enabled };
-                      setAsrCfg(updated);
-                      saveAsrConfig(updated);
-                      notifyChange();
-                      showToast(updated.enabled ? "语音通话已开启" : "语音通话已关闭");
-                    }}
-                    className={`w-12 h-6 rounded-full transition-colors relative ${asrCfg.enabled ? "bg-[#D18B24]" : "bg-zinc-700"}`}
-                  >
-                    <div className={`w-5 h-5 bg-white rounded-full absolute top-0.5 transition-transform ${asrCfg.enabled ? "translate-x-6" : "translate-x-0.5"}`} />
-                  </button>
-                </div>
+            {activeTab === "logs" && <RuntimeLogPanel />}
 
-                {/* 接口地址 */}
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1 font-mono">ASR 接口地址</label>
-                  <input
-                    type="text"
-                    value={asrCfg.endpoint}
-                    onChange={(e) => {
-                      const updated = { ...asrCfg, endpoint: e.target.value };
-                      setAsrCfg(updated);
-                    }}
-                    onBlur={() => {
-                      saveAsrConfig(asrCfg);
-                      notifyChange();
-                    }}
-                    placeholder="https://api.xiaomimimo.com/v1"
-                    className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
-                  />
-                  <p className="text-xs text-zinc-600 mt-1">MiMo ASR 走 OpenAI 兼容的 /chat/completions，填到 /v1 即可。</p>
-                </div>
-
-                {/* 模型 */}
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1 font-mono">ASR 模型</label>
-                  <input
-                    type="text"
-                    value={asrCfg.model}
-                    onChange={(e) => {
-                      const updated = { ...asrCfg, model: e.target.value };
-                      setAsrCfg(updated);
-                    }}
-                    onBlur={() => {
-                      saveAsrConfig(asrCfg);
-                      notifyChange();
-                    }}
-                    placeholder="mimo-v2.5-asr"
-                    className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500"
-                  />
-                  <p className="text-xs text-zinc-600 mt-1">默认 mimo-v2.5-asr（中英双语 + 方言 + 多说话人）。</p>
-                </div>
-
-                {/* API Key */}
-                <div>
-                  <label className="block text-xs text-zinc-400 mb-1 font-mono">ASR API Key</label>
-                  <div className="flex gap-2">
-                    <div className="relative flex-1">
-                      <input
-                        type={showTTSKeys.aliyun ? "text" : "password"}
-                        value={asrCfg.apiKey}
-                        onChange={(e) => {
-                          setAsrCfg({ ...asrCfg, apiKey: e.target.value });
-                        }}
-                        autoComplete="off"
-                        name="amadeus-asr-key"
-                        placeholder="留空则复用上方「Chat模型」的 Key"
-                        className="w-full bg-zinc-800 border border-zinc-600 rounded-lg px-3 py-2 text-sm font-mono text-white placeholder-zinc-500 pr-16"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowTTSKeys((s) => ({ ...s, aliyun: !s.aliyun }))}
-                        className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-zinc-400 hover:text-white"
-                      >
-                        {showTTSKeys.aliyun ? "隐藏" : "显示"}
-                      </button>
-                    </div>
-                    <button
-                      onClick={() => {
-                        const updated = { ...asrCfg, apiKey: asrCfg.apiKey.trim() };
-                        setAsrCfg(updated);
-                        saveAsrConfig(updated);
-                        notifyChange();
-                        showToast(updated.apiKey ? `ASR Key 已保存（${updated.apiKey.length} 字符）` : "已清空，将复用对话 Key");
-                      }}
-                      className="px-3 py-2 bg-[#D18B24] hover:bg-[#E0551E] text-white rounded-lg font-mono text-sm whitespace-nowrap"
-                    >
-                      保存
-                    </button>
-                  </div>
-                  <p className="text-xs text-zinc-600 mt-1">
-                    MiMo 的 ASR Key 可能与对话 Key 不同。若通话时提示「鉴权失败」，请到 platform.xiaomimimo.com 申请 ASR Key 后填这里；留空则复用对话 Key。
-                  </p>
-                </div>
-              </div>
-            )}
-
-            {activeTab === "general" && (
-              <div className="space-y-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <h3 className="text-sm font-mono text-zinc-200">背景音乐</h3>
-                  </div>
-                  <button
-                    onClick={() => {
-                      const next = !bgmEnabled;
-                      setBgmEnabled(next);
-                      localStorage.setItem("amadeus_bgm_enabled", String(next));
-                      notifyChange();
-                      showToast(next ? "背景音乐已开启" : "背景音乐已关闭");
-                    }}
-                    className={`w-12 h-6 rounded-full transition-colors relative ${
-                      bgmEnabled ? "bg-[#D18B24]" : "bg-zinc-700"
-                    }`}
-                  >
-                    <div
-                      className={`w-5 h-5 bg-white rounded-full absolute top-0.5 transition-transform ${
-                        bgmEnabled ? "translate-x-6" : "translate-x-0.5"
-                      }`}
-                    />
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </div>
 
       {toast && (
-        <div className="fixed top-1/2 left-1/2 -translate-x-1/2 translate-y-[268px] z-[60] px-4 py-2 bg-[#8C4F14]/90 border border-[#D18B24] rounded-lg text-sm font-mono text-[#F2B03A] text-center animate-pulse shadow-lg">
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 translate-y-[268px] z-[60] px-4 py-2 bg-[#8C4F14]/90 border border-[#D18B24] rounded-lg text-sm font-mono text-[#F2B03A] text-center animate-pulse shadow-lg">
           {toast}
         </div>
       )}

@@ -1,3 +1,5 @@
+import { log } from "@/lib/debug-log";
+
 /**
  * 情绪分析：从 LLM 回复中提取情绪标签，驱动 Live2D 表情。
  *
@@ -131,5 +133,5 @@ export function dispatchEmotion(raw: string) {
     },
   }));
 
-  console.log("[Emotion] 派发:", result);
+  log("[Emotion] 派发:", result);
 }

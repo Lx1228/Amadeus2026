@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "2.2.0"
+version = "3.0.0"
 description = "Amadeus - 命运石之门数字伴侣（多角色）"
 authors = ["you"]
 license = ""
@@ -20,5 +20,20 @@ tauri-build = { version = "2.6.3", features = [] }
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-tauri = { version = "2.11.3", features = ["tray-icon"] }
-tauri-plugin-fs = "2"
+tauri = { version = "2.11.5", features = ["tray-icon"] }
+# 单实例：重复双击 app.exe 时不再开新窗口，而是把已有窗口带到前台（2026-10-18）
+tauri-plugin-single-instance = "2"
+# tauri-plugin-fs 已移除（2026-10-12）
+#   原用于 src/lib/image-store.ts 存图片，该文件在死代码清理时删除
+#   （图片功能实际走 image-compress + base64 直传）
+#   移除后还顺带解决了 tauri crate(2.11.5) 与 @tauri-apps/plugin-fs(2.7.0) 版本不匹配导致打包失败的问题
+
+# 窗口等比缩放约束（2026-10-25，见 src/window_aspect.rs）
+# 版本刻意对齐 Cargo.lock 里已有的 0.59.0，避免多下一份 crate
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }

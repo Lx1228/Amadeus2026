@@ -80,7 +80,7 @@ Windows Defender 会把未签名的 app.exe 误判为病毒并拦截，导致**�
 | 账号 | 密码 | 角色 |
 |------|------|------|
 | Amadeus | 0728 | 牧濑红莉栖 |
-| Salieri | Miho | 比屋定真帆 |
+| Salieri | Maho | 比屋定真帆 |
 | Tutturu | Mayuri | 椎名真由理 |
 
 * * *

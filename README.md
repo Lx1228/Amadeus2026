@@ -18,7 +18,7 @@
 | 账号 | 密码 | 角色 |
 |------|------|------|
 | Amadeus | 0728 | 牧濑红莉栖 |
-| Salieri | Miho | 比屋定真帆 |
+| Salieri | Maho | 比屋定真帆 |
 | Tutturu | Mayuri | 椎名真由理 |
 
 每个角色有独立的 Live2D 模型、人设、音色、聊天记录。LLM 和 TTS 的 API Key 三个角色共享，只需配置一次。
